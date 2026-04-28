@@ -3,10 +3,17 @@
 [English](#english) | [Русский](#russian)
 
 <a name="english"></a>
-
+<p align="center">
+  <img src="Logo\Logo.png" alt="Logo" width="200">
+</p>
 ## English
 
 Offline & Online ladder logic visualizer for Allen-Bradley SLC 500 / MicroLogix / Logix 5000.
+
+## Video
+
+- [Intro Presentation](https://youtu.be/5EIQuA3fAio)
+- [Video about Functionality](https://youtu.be/EdFXSBzqMIg)
 
 ### Problem and solution
 
@@ -115,6 +122,11 @@ This repository source code is released under the MIT License. See `LICENSE`.
 ## Русский
 
 Offline & Online визуализатор лестничной логики для Allen-Bradley SLC 500 / MicroLogix / Logix 5000.
+
+## Видео
+
+- [Intro Presentation](https://youtu.be/5EIQuA3fAio)
+- [Video about Functionality](https://youtu.be/EdFXSBzqMIg)
 
 ### Проблема и решение
 
