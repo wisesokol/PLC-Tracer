@@ -1,0 +1,1420 @@
+﻿<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="20.06" TargetName="ParserTest" TargetType="Controller" ContainsContext="false" Owner="PLC101" ExportDate="Thu Apr 09 17:07:15 2026" ExportOptions="DecoratedData AllProjDocTrans">
+<Controller Use="Target" Name="ParserTest" ProcessorType="1769-L32E" MajorRev="20" MinorRev="12" CompatibilityMode="V20.01" TimeSlice="20" ShareUnusedTimeSlice="1" ProjectCreationDate="Thu Apr 09 17:05:14 2026" LastModifiedDate="Thu Apr 09 17:06:48 2026" SFCExecutionControl="CurrentActive"
+ SFCRestartPosition="MostRecent" SFCLastScan="DontScan" ProjectSN="16#d018_f6a5" MatchProjectToController="false" CanUseRPIFromProducer="false" InhibitAutomaticFirmwareUpdate="0">
+<Description>
+<![CDATA[16-Chain I/O Test Bench
+Each DI triggers a logic chain ending at corresponding DO
+Covers all 56 supported L5X instructions]]>
+</Description>
+<RedundancyInfo Enabled="false" KeepTestEditsOnSwitchOver="false" IOMemoryPadPercentage="90" DataTablePadPercentage="50"/>
+<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>
+<SafetyInfo/>
+<DataTypes>
+<DataType Name="UDT_Alarm" Family="NoFamily" Class="User">
+<Members>
+<Member Name="HighLimit" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="LowLimit" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Deadband" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Severity" DataType="INT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="ZZZZZZZZZZUDTAlarm4" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="true" ExternalAccess="Read/Write"/>
+<Member Name="Enabled" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTAlarm4" BitNumber="0" ExternalAccess="Read/Write"/>
+<Member Name="Latched" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTAlarm4" BitNumber="1" ExternalAccess="Read/Write"/>
+<Member Name="Active" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTAlarm4" BitNumber="2" ExternalAccess="Read/Write"/>
+<Member Name="Acked" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTAlarm4" BitNumber="3" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Name="UDT_Motor" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Motor control structure]]>
+</Description>
+<Members>
+<Member Name="Speed" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Speed setpoint RPM]]>
+</Description>
+</Member>
+<Member Name="Current" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="RunHours" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="FaultCode" DataType="INT" Dimension="0" Radix="Hex" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="ZZZZZZZZZZUDTMotor4" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="true" ExternalAccess="Read/Write"/>
+<Member Name="Running" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTMotor4" BitNumber="0" ExternalAccess="Read/Write"/>
+<Member Name="Fault" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTMotor4" BitNumber="1" ExternalAccess="Read/Write"/>
+<Member Name="Ready" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTMotor4" BitNumber="2" ExternalAccess="Read/Write"/>
+<Member Name="Enabled" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTMotor4" BitNumber="3" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+<DataType Name="UDT_Recipe" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Recipe parameters]]>
+</Description>
+<Members>
+<Member Name="Temperature" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Pressure" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="MixTime" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Speed" DataType="INT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Weights" DataType="REAL" Dimension="5" Radix="Float" Hidden="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Ingredient weights]]>
+</Description>
+</Member>
+<Member Name="ZZZZZZZZZZUDTRecipe5" DataType="SINT" Dimension="0" Radix="Decimal" Hidden="true" ExternalAccess="Read/Write"/>
+<Member Name="Active" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTRecipe5" BitNumber="0" ExternalAccess="Read/Write"/>
+<Member Name="Complete" DataType="BIT" Dimension="0" Radix="Decimal" Hidden="false" Target="ZZZZZZZZZZUDTRecipe5" BitNumber="1" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+</DataTypes>
+<Modules>
+<Module Name="Controller" CatalogNumber="1769-L32E" Vendor="1" ProductType="14" ProductCode="77" Major="20" Minor="12" ParentModule="Controller" ParentModPortId="1" Inhibited="false" MajorFault="true"
+>
+<EKey State="ExactMatch"/>
+<Ports>
+<Port Id="1" Address="0" Type="CompactLogixL32EController" Upstream="false">
+<Bus/>
+</Port>
+</Ports>
+</Module>
+<Module Name="LocalENB" CatalogNumber="1769-L32E Ethernet Port" Vendor="1" ProductType="12" ProductCode="158" Major="20" Minor="11" ParentModule="Controller" ParentModPortId="1" Inhibited="false" MajorFault="false"
+>
+<EKey State="CompatibleModule"/>
+<Ports>
+<Port Id="1" Address="1" Type="CompactLogixL32Ethernet" Upstream="true"/>
+<Port Id="2" Type="Ethernet" Upstream="false">
+<Bus/>
+</Port>
+</Ports>
+</Module>
+<Module Name="Local" CatalogNumber="CompactBus" Vendor="1" ProductType="12" ProductCode="71" Major="20" Minor="11" ParentModule="Controller" ParentModPortId="1" Inhibited="false" MajorFault="true"
+>
+<EKey State="ExactMatch"/>
+<Ports>
+<Port Id="1" Address="0" Type="Compact" Upstream="false">
+<Bus Size="17"/>
+</Port>
+<Port Id="2" Address="3" Type="CompactVirtualAdapter" Upstream="true"/>
+</Ports>
+<Communications CommMethod="805306369">
+<Connections/>
+</Communications>
+<ExtendedProperties>
+<public><ConfigID>901</ConfigID><CatNum>CompactBus</CatNum></public></ExtendedProperties>
+</Module>
+<Module Name="module1" CatalogNumber="1769-IQ16/A" Vendor="1" ProductType="7" ProductCode="67" Major="1" Minor="1" ParentModule="Local" ParentModPortId="1" Inhibited="false" MajorFault="true"
+>
+<EKey State="CompatibleModule"/>
+<Ports>
+<Port Id="1" Address="1" Type="Compact" Upstream="true"/>
+</Ports>
+<Communications CommMethod="536870913">
+<ConfigData ConfigSize="4">
+<Data>08 00 00 00 66 00 00 00 01 00 00 00</Data>
+</ConfigData>
+<Connections>
+<Connection Name="Input" RPI="20000" Type="Input" EventID="0" ProgrammaticallySendEventTrigger="false">
+<InputTag ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Digital Input 16pt]]>
+</Description>
+<ForceData>00 00 00 00 01 00 03 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00</ForceData>
+<Data Format="Decorated">
+<Structure DataType="AB:1769_DI16:I:0">
+<DataValueMember Name="Fault" DataType="DINT" Radix="Binary" Value="2#0000_0000_0000_0000_0000_0000_0000_0000"/>
+<DataValueMember Name="Data" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0001"/>
+</Structure>
+</Data>
+</InputTag>
+</Connection>
+</Connections>
+</Communications>
+<ExtendedProperties>
+<public><ConfigID>250</ConfigID><CatNum>1769-IQ16</CatNum></public></ExtendedProperties>
+</Module>
+<Module Name="Output" CatalogNumber="1769-OW16/A" Vendor="1" ProductType="7" ProductCode="85" Major="1" Minor="1" ParentModule="Local" ParentModPortId="1" Inhibited="false" MajorFault="true"
+>
+<EKey State="CompatibleModule"/>
+<Ports>
+<Port Id="1" Address="2" Type="Compact" Upstream="true"/>
+</Ports>
+<Communications CommMethod="536870913">
+<ConfigTag ConfigSize="14" ExternalAccess="Read/Write">
+<Data>12 00 00 00 66 00 00 00 01 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="AB:1769_DO16:C:0">
+<DataValueMember Name="Config" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0000"/>
+<DataValueMember Name="ProgToFaultEn" DataType="BOOL" Value="0"/>
+<DataValueMember Name="ProgMode" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0000"/>
+<DataValueMember Name="ProgValue" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0000"/>
+<DataValueMember Name="FaultMode" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0000"/>
+<DataValueMember Name="FaultValue" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0000"/>
+</Structure>
+</Data>
+</ConfigTag>
+<Connections>
+<Connection Name="Output" RPI="20000" Type="Output" EventID="0" ProgrammaticallySendEventTrigger="false">
+<InputTag ExternalAccess="Read/Write">
+<ForceData>00 00 00 00 03 00 01 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00</ForceData>
+<Data Format="Decorated">
+<Structure DataType="AB:1769_DO16:I:0">
+<DataValueMember Name="Fault" DataType="DINT" Radix="Binary" Value="2#0000_0000_0000_0000_0000_0000_0000_0000"/>
+<DataValueMember Name="ReadBack" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0011"/>
+</Structure>
+</Data>
+</InputTag>
+<OutputTag ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Digital Output 16pt]]>
+</Description>
+<Data>03 00 00 00</Data>
+<ForceData>00 00 00 00 00 00 00 00 00 00 00 00</ForceData>
+<Data Format="Decorated">
+<Structure DataType="AB:1769_DO16:O:0">
+<DataValueMember Name="Data" DataType="INT" Radix="Binary" Value="2#0000_0000_0000_0011"/>
+</Structure>
+</Data>
+</OutputTag>
+</Connection>
+</Connections>
+</Communications>
+<ExtendedProperties>
+<public><ConfigID>150</ConfigID><CatNum>1769-OW16</CatNum></public></ExtendedProperties>
+</Module>
+</Modules>
+<AddOnInstructionDefinitions>
+<AddOnInstructionDefinition Name="AOI_Scale" Revision="1.0" ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false" CreatedDate="2026-01-15T10:00:00.000Z" CreatedBy="TestUser" EditedDate="2026-03-20T14:30:00.000Z" EditedBy="TestUser" SoftwareRevision="v20.06">
+<Description>
+<![CDATA[Linear scaling with clamping]]>
+</Description>
+<Parameters>
+<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">
+<Description>
+<![CDATA[Enable Input - System Parameter]]>
+</Description>
+</Parameter>
+<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">
+<Description>
+<![CDATA[Enable Output - System Parameter]]>
+</Description>
+</Parameter>
+<Parameter Name="RawIn" TagType="Base" DataType="DINT" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<DefaultData>00 00 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="RawMin" TagType="Base" DataType="DINT" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<DefaultData>00 00 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="RawMax" TagType="Base" DataType="DINT" Usage="Input" Radix="Decimal" Required="true" Visible="true" ExternalAccess="Read/Write">
+<DefaultData>FF 7F 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="32767"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="EngMin" TagType="Base" DataType="REAL" Usage="Input" Radix="Float" Required="true" Visible="true" ExternalAccess="Read/Write">
+<DefaultData>00 00 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="EngMax" TagType="Base" DataType="REAL" Usage="Input" Radix="Float" Required="true" Visible="true" ExternalAccess="Read/Write">
+<DefaultData>00 00 C8 42</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="100.0"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="Result" TagType="Base" DataType="REAL" Usage="Output" Radix="Float" Required="true" Visible="true" ExternalAccess="Read Only">
+<DefaultData>00 00 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</DefaultData>
+</Parameter>
+<Parameter Name="Clamp" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="true" ExternalAccess="Read Only">
+<DefaultData>00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</DefaultData>
+</Parameter>
+</Parameters>
+<LocalTags>
+<LocalTag Name="Temp" DataType="REAL" Radix="Float" ExternalAccess="None">
+<DefaultData>00 00 00 00</DefaultData>
+<DefaultData Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</DefaultData>
+</LocalTag>
+</LocalTags>
+<Routines>
+<Routine Name="Logic" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[Scale: Result = (RawIn-RawMin)/(RawMax-RawMin)*(EngMax-EngMin)+EngMin]]>
+</Comment>
+<Text>
+<![CDATA[NEQ(RawMax,RawMin)CPT(Temp,(RawIn-RawMin)*1.0/(RawMax-RawMin)*(EngMax-EngMin)+EngMin);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[Clamp to engineering range]]>
+</Comment>
+<Text>
+<![CDATA[[GRT(Temp,EngMax) [MOV(EngMax,Result) ,OTL(Clamp) ] ,LES(Temp,EngMin) [MOV(EngMin,Result) ,OTL(Clamp) ] ,LIM(EngMin,Temp,EngMax) [MOV(Temp,Result) ,OTU(Clamp) ] ];]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</AddOnInstructionDefinition>
+</AddOnInstructionDefinitions>
+<Tags>
+<Tag Name="Alarm_Word" TagType="Base" DataType="DINT" Radix="Binary" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Alarm bit field]]>
+</Description>
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Binary" Value="2#0000_0000_0000_0000_0000_0000_0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Alm_Temp" TagType="Base" DataType="UDT_Alarm" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Temperature alarm config]]>
+</Description>
+<Data>00 00 48 43 00 00 20 41 00 00 00 40 F4 01 01 00</Data>
+<Data Format="Decorated">
+<Structure DataType="UDT_Alarm">
+<DataValueMember Name="HighLimit" DataType="REAL" Radix="Float" Value="200.0"/>
+<DataValueMember Name="LowLimit" DataType="REAL" Radix="Float" Value="10.0"/>
+<DataValueMember Name="Deadband" DataType="REAL" Radix="Float" Value="2.0"/>
+<DataValueMember Name="Severity" DataType="INT" Radix="Decimal" Value="500"/>
+<DataValueMember Name="Enabled" DataType="BOOL" Value="1"/>
+<DataValueMember Name="Latched" DataType="BOOL" Value="0"/>
+<DataValueMember Name="Active" DataType="BOOL" Value="0"/>
+<DataValueMember Name="Acked" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="Arr_Dst" TagType="Base" DataType="DINT" Dimensions="10" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 10: array destination]]>
+</Description>
+<Data>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Array DataType="DINT" Dimensions="10" Radix="Decimal">
+<Element Index="[0]" Value="0"/>
+<Element Index="[1]" Value="0"/>
+<Element Index="[2]" Value="0"/>
+<Element Index="[3]" Value="0"/>
+<Element Index="[4]" Value="0"/>
+<Element Index="[5]" Value="0"/>
+<Element Index="[6]" Value="0"/>
+<Element Index="[7]" Value="0"/>
+<Element Index="[8]" Value="0"/>
+<Element Index="[9]" Value="0"/>
+</Array>
+</Data>
+</Tag>
+<Tag Name="Arr_Size" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Arr_Src" TagType="Base" DataType="DINT" Dimensions="10" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 10: array source (descending)]]>
+</Description>
+<Data>0A 00 00 00 09 00 00 00 08 00 00 00 07 00 00 00 
+06 00 00 00 05 00 00 00 04 00 00 00 03 00 00 00 
+02 00 00 00 01 00 00 00</Data>
+<Data Format="Decorated">
+<Array DataType="DINT" Dimensions="10" Radix="Decimal">
+<Element Index="[0]" Value="10"/>
+<Element Index="[1]" Value="9"/>
+<Element Index="[2]" Value="8"/>
+<Element Index="[3]" Value="7"/>
+<Element Index="[4]" Value="6"/>
+<Element Index="[5]" Value="5"/>
+<Element Index="[6]" Value="4"/>
+<Element Index="[7]" Value="3"/>
+<Element Index="[8]" Value="2"/>
+<Element Index="[9]" Value="1"/>
+</Array>
+</Data>
+</Tag>
+<Tag Name="Batch_CTU" TagType="Base" DataType="COUNTER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 4: batch counter PRE=10]]>
+</Description>
+<Data>00 00 00 00 0A 00 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="COUNTER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="10"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="CU" DataType="BOOL" Value="0"/>
+<DataValueMember Name="CD" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="OV" DataType="BOOL" Value="0"/>
+<DataValueMember Name="UN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="Batch_Done" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Mask" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>FF 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_00ff"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Src" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 9: bitwise source]]>
+</Description>
+<Data>C3 A5 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_a5c3"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp1" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp2" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp3" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp4" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp5" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Bit_Tmp6" TagType="Base" DataType="DINT" Radix="Hex" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Hex" Value="16#0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Chain_Active" TagType="Base" DataType="DINT" Radix="Binary" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Bit-per-chain active tracking]]>
+</Description>
+<Data>01 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Binary" Value="2#0000_0000_0000_0000_0000_0000_0000_0001"/>
+</Data>
+</Tag>
+<Tag Name="Cmp_Flags" TagType="Base" DataType="DINT" Radix="Binary" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 7: comparison result flags]]>
+</Description>
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Binary" Value="2#0000_0000_0000_0000_0000_0000_0000_0000"/>
+</Data>
+</Tag>
+<Tag Name="Cmp_Val" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 7: comparison test value]]>
+</Description>
+<Data>32 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="50"/>
+</Data>
+</Tag>
+<Tag Name="Diag_Tmp" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Down_CTD" TagType="Base" DataType="COUNTER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 5: countdown from 5]]>
+</Description>
+<Data>00 00 00 20 05 00 00 00 05 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="COUNTER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="5"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="5"/>
+<DataValueMember Name="CU" DataType="BOOL" Value="0"/>
+<DataValueMember Name="CD" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="1"/>
+<DataValueMember Name="OV" DataType="BOOL" Value="0"/>
+<DataValueMember Name="UN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="EStop_Alarm" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="EStop_Reset" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Init_Done" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Initialization flag (for cross-program ref test)]]>
+</Description>
+<Data>01</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="1"/>
+</Data>
+</Tag>
+<Tag Name="Math_A" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>64 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="100"/>
+</Data>
+</Tag>
+<Tag Name="Math_B" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>07 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="7"/>
+</Data>
+</Tag>
+<Tag Name="Math_RealTmp" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="Math_RealTmp2" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="Math_Result" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="Math_Tmp" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Math_Tmp2" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Math_Tmp3" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Math_Tmp4" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Motor_1" TagType="Base" DataType="UDT_Motor" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 13: motor instance]]>
+</Description>
+<Data>00 00 00 00 00 00 00 00 00 00 00 00 00 00 04 00</Data>
+<Data Format="Decorated">
+<Structure DataType="UDT_Motor">
+<DataValueMember Name="Speed" DataType="REAL" Radix="Float" Value="0.0"/>
+<DataValueMember Name="Current" DataType="REAL" Radix="Float" Value="0.0"/>
+<DataValueMember Name="RunHours" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="FaultCode" DataType="INT" Radix="Hex" Value="16#0000"/>
+<DataValueMember Name="Running" DataType="BOOL" Value="0"/>
+<DataValueMember Name="Fault" DataType="BOOL" Value="0"/>
+<DataValueMember Name="Ready" DataType="BOOL" Value="1"/>
+<DataValueMember Name="Enabled" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="ONS_Batch" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="ONS_Start" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>01</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="1"/>
+</Data>
+</Tag>
+<Tag Name="OSF_Out" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="OSF_Store" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="OSR_Out" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="OSR_Store" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Recipe_1" TagType="Base" DataType="UDT_Recipe" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 13: test recipe]]>
+</Description>
+<Data>00 00 34 43 00 00 C8 41 30 75 00 00 DC 05 00 00 
+00 00 20 41 00 00 A0 41 00 00 F0 41 00 00 20 42 
+00 00 48 42 01 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="UDT_Recipe">
+<DataValueMember Name="Temperature" DataType="REAL" Radix="Float" Value="180.0"/>
+<DataValueMember Name="Pressure" DataType="REAL" Radix="Float" Value="25.0"/>
+<DataValueMember Name="MixTime" DataType="DINT" Radix="Decimal" Value="30000"/>
+<DataValueMember Name="Speed" DataType="INT" Radix="Decimal" Value="1500"/>
+<ArrayMember Name="Weights" DataType="REAL" Dimensions="5" Radix="Float">
+<Element Index="[0]" Value="10.0"/>
+<Element Index="[1]" Value="20.0"/>
+<Element Index="[2]" Value="30.0"/>
+<Element Index="[3]" Value="40.0"/>
+<Element Index="[4]" Value="50.0"/>
+</ArrayMember>
+<DataValueMember Name="Active" DataType="BOOL" Value="1"/>
+<DataValueMember Name="Complete" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="RTO_Reset" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="RTO_Timer" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 6: retentive timer 5s]]>
+</Description>
+<Data>00 00 00 00 88 13 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="5000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="Scale_RawVal" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 11: raw analog input]]>
+</Description>
+<Data>00 40 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="16384"/>
+</Data>
+</Tag>
+<Tag Name="Scale_Result" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="Scale_T" TagType="Base" DataType="AOI_Scale" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 11: AOI_Scale instance]]>
+</Description>
+<Data>00 00 00 00 00 40 00 00 00 00 00 00 FF 7F 00 00 
+00 00 00 00 00 00 C8 42 00 00 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="AOI_Scale">
+<DataValueMember Name="EnableIn" DataType="BOOL" Value="0"/>
+<DataValueMember Name="EnableOut" DataType="BOOL" Value="0"/>
+<DataValueMember Name="RawIn" DataType="DINT" Radix="Decimal" Value="16384"/>
+<DataValueMember Name="RawMin" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="RawMax" DataType="DINT" Radix="Decimal" Value="32767"/>
+<DataValueMember Name="EngMin" DataType="REAL" Radix="Float" Value="0.0"/>
+<DataValueMember Name="EngMax" DataType="REAL" Radix="Float" Value="100.0"/>
+<DataValueMember Name="Result" DataType="REAL" Radix="Float" Value="0.0"/>
+<DataValueMember Name="Clamp" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="ScanTime" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Sort_CTL" TagType="Base" DataType="CONTROL" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00 0A 00 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="CONTROL">
+<DataValueMember Name="LEN" DataType="DINT" Radix="Decimal" Value="10"/>
+<DataValueMember Name="POS" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="EU" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="EM" DataType="BOOL" Value="0"/>
+<DataValueMember Name="ER" DataType="BOOL" Value="0"/>
+<DataValueMember Name="UL" DataType="BOOL" Value="0"/>
+<DataValueMember Name="IN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="FD" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="Str_Buf" TagType="Base" DataType="STRING" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 
+00 00 00 00 00 00 00 00</Data>
+<Data Format="String" Length="0">
+<![CDATA['']]>
+</Data>
+</Tag>
+<Tag Name="Sub_InA" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 14: JSR input A]]>
+</Description>
+<Data>19 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="25"/>
+</Data>
+</Tag>
+<Tag Name="Sub_InB" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 14: JSR input B]]>
+</Description>
+<Data>0A 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="10"/>
+</Data>
+</Tag>
+<Tag Name="Sub_RetVal" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Swap_Tmp" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="System_Running" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Global system run state]]>
+</Description>
+<Data>01</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="1"/>
+</Data>
+</Tag>
+<Tag Name="TaskStatus" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 15: SSV source value]]>
+</Description>
+<Data>F4 01 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="500"/>
+</Data>
+</Tag>
+<Tag Name="TOF_Timer" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 1: off-delay 3s]]>
+</Description>
+<Data>F2 3D 09 A0 B8 0B 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="3000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="1"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="1"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="TON_Chain_1" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 3: first delay 2s]]>
+</Description>
+<Data>00 00 00 00 D0 07 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="2000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="TON_Chain_2" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Chain 3: second delay 1.5s]]>
+</Description>
+<Data>00 00 00 00 DC 05 00 00 00 00 00 00</Data>
+<Data Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="1500"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="Diagnostics" TestEdits="false" MainRoutineName="DiagMain" Disabled="false">
+<Description>
+<![CDATA[Chains 14-15: JSR/SBR/RET flow control, GSV/SSV/TND/AFI/NOP system]]>
+</Description>
+<Tags>
+<Tag Name="Diag_Local" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Diag_Skip" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data>00</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+</Tags>
+<Routines>
+<Routine Name="CalcRoutine" Type="RLL">
+<Description>
+<![CDATA[Chain 14: Subroutine - SBR receive, MUL, JMP/LBL, RET]]>
+</Description>
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[SBR: receive two input parameters]]>
+</Comment>
+<Text>
+<![CDATA[SBR(Diag_Local,Diag_Tmp)NOP();]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[JMP: skip multiply if inputs equal]]>
+</Comment>
+<Text>
+<![CDATA[EQU(Diag_Local,Diag_Tmp)JMP(SkipCalc);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment>
+<![CDATA[MUL: multiply inputs -> Diag_Tmp]]>
+</Comment>
+<Text>
+<![CDATA[MUL(Diag_Local,Diag_Tmp,Diag_Tmp);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment>
+<![CDATA[LBL: jump target + NOP]]>
+</Comment>
+<Text>
+<![CDATA[LBL(SkipCalc)NOP();]]>
+</Text>
+</Rung>
+<Rung Number="4" Type="N">
+<Comment>
+<![CDATA[RET: return computed result]]>
+</Comment>
+<Text>
+<![CDATA[RET(Diag_Tmp);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+<Routine Name="DiagMain" Type="RLL">
+<Description>
+<![CDATA[Chains 14-15: JSR call, GSV/SSV system, TND/AFI/NOP]]>
+</Description>
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[Chain 14: Cross-program ref - JSR to CalcRoutine when System_Running AND DI.14]]>
+</Comment>
+<Text>
+<![CDATA[XIC(System_Running)XIC(Local:1:I.Data.14)JSR(CalcRoutine,2,Sub_InA,Sub_InB,Sub_RetVal);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[Chain 14: Subroutine result check -> DO.14]]>
+</Comment>
+<Text>
+<![CDATA[GRT(Sub_RetVal,0)OTE(Local:2:O.Data.14);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment>
+<![CDATA[Chain 15: GSV read main task scan time]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.15)GSV(Task,MainTask,LastScanTime,ScanTime);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment>
+<![CDATA[Chain 15: SSV write task watchdog value]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.15)SSV(Task,MainTask,Watchdog,TaskStatus);]]>
+</Text>
+</Rung>
+<Rung Number="4" Type="N">
+<Comment>
+<![CDATA[Chain 15: TND stops scan when DI.15 OFF (remaining rungs only execute when DI.15 ON)]]>
+</Comment>
+<Text>
+<![CDATA[XIO(Local:1:I.Data.15)TND();]]>
+</Text>
+</Rung>
+<Rung Number="5" Type="N">
+<Comment>
+<![CDATA[Chain 15: CLR temp and drive output -> DO.15]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.15)[CLR(Diag_Tmp) ,OTE(Local:2:O.Data.15) ];]]>
+</Text>
+</Rung>
+<Rung Number="6" Type="N">
+<Comment>
+<![CDATA[Chain 15: AFI always-false disabled rung (visualizer test)]]>
+</Comment>
+<Text>
+<![CDATA[AFI()OTE(Diag_Skip);]]>
+</Text>
+</Rung>
+<Rung Number="7" Type="N">
+<Comment>
+<![CDATA[Chain 15: NOP end-of-chain marker]]>
+</Comment>
+<Text>
+<![CDATA[NOP();]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+<Program Name="MainProgram" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false">
+<Description>
+<![CDATA[Chains 0-10: Start/Stop, Timers, Counters, Comparisons, Math, Bitwise, Arrays]]>
+</Description>
+<Tags>
+<Tag Name="Init_Done" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Program-scope init flag (cross-program ref target)]]>
+</Description>
+<Data>01</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="1"/>
+</Data>
+</Tag>
+<Tag Name="Status" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Scope test: same name as ProcessControl.Status]]>
+</Description>
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+</Tags>
+<Routines>
+<Routine Name="MainRoutine" Type="RLL">
+<Description>
+<![CDATA[Chains 0-10: 34 rungs, 16 DI to DO logic chains]]>
+</Description>
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[Chain 0: Start button (DI.0) one-shot latches System_Running]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.0)ONS(ONS_Start)OTL(System_Running);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[Chain 0: System active indicator -> DO.0]]>
+</Comment>
+<Text>
+<![CDATA[XIC(System_Running)[OTE(Local:2:O.Data.0) ,OTL(Chain_Active.0) ];]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment>
+<![CDATA[Chain 1: Stop button (DI.1) unlatches System_Running]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.1)OTU(System_Running);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment>
+<![CDATA[Chain 1: TOF off-delay 3s after System_Running drops]]>
+</Comment>
+<Text>
+<![CDATA[XIC(System_Running)TOF(TOF_Timer,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="4" Type="N">
+<Comment>
+<![CDATA[Chain 1: Delayed stop output -> DO.1]]>
+</Comment>
+<Text>
+<![CDATA[XIO(Local:1:I.Data.1)XIC(TOF_Timer.DN)OTE(Local:2:O.Data.1);]]>
+</Text>
+</Rung>
+<Rung Number="5" Type="N">
+<Comment>
+<![CDATA[Chain 2: E-Stop (DI.2) latches alarm, kills system]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.2)[OTL(EStop_Alarm) ,OTL(Alarm_Word.0) ,OTU(System_Running) ];]]>
+</Text>
+</Rung>
+<Rung Number="6" Type="N">
+<Comment>
+<![CDATA[Chain 2: Reset clears E-Stop alarm when DI.2 released]]>
+</Comment>
+<Text>
+<![CDATA[XIC(EStop_Reset)XIO(Local:1:I.Data.2)[OTU(EStop_Alarm) ,OTU(Alarm_Word.0) ];]]>
+</Text>
+</Rung>
+<Rung Number="7" Type="N">
+<Comment>
+<![CDATA[Chain 2: Beacon output -> DO.2]]>
+</Comment>
+<Text>
+<![CDATA[XIC(EStop_Alarm)OTE(Local:2:O.Data.2);]]>
+</Text>
+</Rung>
+<Rung Number="8" Type="N">
+<Comment>
+<![CDATA[Chain 3: First TON delay 2s from DI.3]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.3)XIO(TON_Chain_1.DN)TON(TON_Chain_1,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="9" Type="N">
+<Comment>
+<![CDATA[Chain 3: Second TON delay 1.5s after first completes]]>
+</Comment>
+<Text>
+<![CDATA[XIC(TON_Chain_1.DN)XIO(TON_Chain_2.DN)TON(TON_Chain_2,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="10" Type="N">
+<Comment>
+<![CDATA[Chain 3: Timer chain complete -> DO.3]]>
+</Comment>
+<Text>
+<![CDATA[XIC(TON_Chain_2.DN)OTE(Local:2:O.Data.3);]]>
+</Text>
+</Rung>
+<Rung Number="11" Type="N">
+<Comment>
+<![CDATA[Chain 4: DI.4 pulse counted by CTU (preset=10)]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.4)ONS(ONS_Batch)CTU(Batch_CTU,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="12" Type="N">
+<Comment>
+<![CDATA[Chain 4: Batch complete - latch done, reset counter]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Batch_CTU.DN)[OTL(Batch_Done) ,RES(Batch_CTU) ];]]>
+</Text>
+</Rung>
+<Rung Number="13" Type="N">
+<Comment>
+<![CDATA[Chain 4: Batch done -> DO.4]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Batch_Done)OTE(Local:2:O.Data.4);]]>
+</Text>
+</Rung>
+<Rung Number="14" Type="N">
+<Comment>
+<![CDATA[Chain 5: DI.5 counts down (CTD, preset=5, ACC starts at 5)]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.5)CTD(Down_CTD,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="15" Type="N">
+<Comment>
+<![CDATA[Chain 5: Countdown reached zero -> DO.5]]>
+</Comment>
+<Text>
+<![CDATA[LEQ(Down_CTD.ACC,0)OTE(Local:2:O.Data.5);]]>
+</Text>
+</Rung>
+<Rung Number="16" Type="N">
+<Comment>
+<![CDATA[Chain 6: RTO retentive timer accumulates while DI.6 on (5s)]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.6)RTO(RTO_Timer,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="17" Type="N">
+<Comment>
+<![CDATA[Chain 6: RTO done -> DO.6]]>
+</Comment>
+<Text>
+<![CDATA[XIC(RTO_Timer.DN)OTE(Local:2:O.Data.6);]]>
+</Text>
+</Rung>
+<Rung Number="18" Type="N">
+<Comment>
+<![CDATA[Chain 6: RTO reset]]>
+</Comment>
+<Text>
+<![CDATA[XIC(RTO_Reset)RES(RTO_Timer);]]>
+</Text>
+</Rung>
+<Rung Number="19" Type="N">
+<Comment>
+<![CDATA[Chain 7: Load comparison value when DI.7 active]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.7)MOV(50,Cmp_Val);]]>
+</Text>
+</Rung>
+<Rung Number="20" Type="N">
+<Comment>
+<![CDATA[Chain 7: Six comparisons EQU NEQ GRT GEQ LES LEQ -> flag bits]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.7)[EQU(Cmp_Val,50) OTL(Cmp_Flags.0) ,NEQ(Cmp_Val,99) OTL(Cmp_Flags.1) ,GRT(Cmp_Val,10) OTL(Cmp_Flags.2) ,GEQ(Cmp_Val,50) OTL(Cmp_Flags.3) ,LES(Cmp_Val,100) OTL(Cmp_Flags.4) ,LEQ(Cmp_Val,50) OTL(Cmp_Flags.5) ];]]>
+</Text>
+</Rung>
+<Rung Number="21" Type="N">
+<Comment>
+<![CDATA[Chain 7: LIM and MEQ checks]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.7)[LIM(10,Cmp_Val,100) OTL(Cmp_Flags.6) ,MEQ(Cmp_Val,16#0000_00FF,16#0000_0032) OTL(Cmp_Flags.7) ];]]>
+</Text>
+</Rung>
+<Rung Number="22" Type="N">
+<Comment>
+<![CDATA[Chain 7: All 8 flags set -> DO.7]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Cmp_Flags.0)XIC(Cmp_Flags.1)XIC(Cmp_Flags.2)XIC(Cmp_Flags.3)XIC(Cmp_Flags.4)XIC(Cmp_Flags.5)XIC(Cmp_Flags.6)XIC(Cmp_Flags.7)OTE(Local:2:O.Data.7);]]>
+</Text>
+</Rung>
+<Rung Number="23" Type="N">
+<Comment>
+<![CDATA[Chain 8: Init math chain - MOV operands, CLR result]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.8)[MOV(100,Math_A) ,MOV(7,Math_B) ,CLR(Math_Result) ];]]>
+</Text>
+</Rung>
+<Rung Number="24" Type="N">
+<Comment>
+<![CDATA[Chain 8: ADD SUB MUL DIV MOD in parallel branches]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.8)[ADD(Math_A,Math_B,Math_Tmp) ,SUB(Math_A,Math_B,Math_Tmp2) ,MUL(Math_A,Math_B,Math_Tmp3) ,DIV(Math_A,Math_B,Math_Tmp4) ,MOD(Math_A,Math_B,Cmp_Val) ];]]>
+</Text>
+</Rung>
+<Rung Number="25" Type="N">
+<Comment>
+<![CDATA[Chain 8: NEG ABS SQR CPT in parallel branches]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.8)[NEG(Math_Tmp2,Math_Tmp) ,ABS(Math_Tmp,Math_Tmp2) ,SQR(Math_Tmp3,Math_RealTmp) ,CPT(Math_RealTmp2,Math_RealTmp+Math_Tmp2*1.0) ];]]>
+</Text>
+</Rung>
+<Rung Number="26" Type="N">
+<Comment>
+<![CDATA[Chain 8: Math result check -> DO.8]]>
+</Comment>
+<Text>
+<![CDATA[GRT(Math_RealTmp2,0.0)OTE(Local:2:O.Data.8);]]>
+</Text>
+</Rung>
+<Rung Number="27" Type="N">
+<Comment>
+<![CDATA[Chain 9: AND OR XOR bitwise operations]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.9)[AND(Bit_Src,Bit_Mask,Bit_Tmp1) ,OR(Bit_Src,16#0000_FF00,Bit_Tmp2) ,XOR(Bit_Src,16#0000_FFFF,Bit_Tmp3) ];]]>
+</Text>
+</Rung>
+<Rung Number="28" Type="N">
+<Comment>
+<![CDATA[Chain 9: NOT BTD MVM bitwise operations]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.9)[NOT(Bit_Src,Bit_Tmp4) ,BTD(Bit_Src,0,Bit_Tmp5,8,4) ,MVM(Bit_Src,16#0000_00FF,Bit_Tmp6) ];]]>
+</Text>
+</Rung>
+<Rung Number="29" Type="N">
+<Comment>
+<![CDATA[Chain 9: Bitwise results non-zero -> DO.9]]>
+</Comment>
+<Text>
+<![CDATA[NEQ(Bit_Tmp1,0)NEQ(Bit_Tmp4,0)NEQ(Bit_Tmp6,0)OTE(Local:2:O.Data.9);]]>
+</Text>
+</Rung>
+<Rung Number="30" Type="N">
+<Comment>
+<![CDATA[Chain 10: COP array copy, FLL fill source with zeros]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.10)[COP(Arr_Src[0],Arr_Dst[0],10) ,FLL(0,Arr_Src[0],10) ];]]>
+</Text>
+</Rung>
+<Rung Number="31" Type="N">
+<Comment>
+<![CDATA[Chain 10: SIZE get array length, SRT sort destination]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.10)[SIZE(Arr_Dst,0,Arr_Size) ,SRT(Arr_Dst[0],0,Sort_CTL,?,?) ];]]>
+</Text>
+</Rung>
+<Rung Number="32" Type="N">
+<Comment>
+<![CDATA[Chain 10: SWPB byte swap, DTOS integer to string]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.10)[SWPB(Arr_Dst[0],REVERSE,Swap_Tmp) ,DTOS(Arr_Dst[0],Str_Buf) ];]]>
+</Text>
+</Rung>
+<Rung Number="33" Type="N">
+<Comment>
+<![CDATA[Chain 10: Array size check -> DO.10]]>
+</Comment>
+<Text>
+<![CDATA[EQU(Arr_Size,10)OTE(Local:2:O.Data.10);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+<Program Name="ProcessControl" TestEdits="false" MainRoutineName="ProcMain" Disabled="false">
+<Description>
+<![CDATA[Chains 11-13: AOI Scale, OSR/OSF edge detection, Recipe/Motor UDT]]>
+</Description>
+<Tags>
+<Tag Name="Proc_Tmp" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="Status" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Scope test: same name as MainProgram.Status]]>
+</Description>
+<Data>00 00 00 00</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+</Tags>
+<Routines>
+<Routine Name="ProcMain" Type="RLL">
+<Description>
+<![CDATA[Chains 11-13: AOI, OSR/OSF, Recipe+Motor]]>
+</Description>
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[Chain 11: Load raw value when DI.11 active]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.11)MOV(16384,Scale_RawVal);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[Chain 11: AOI_Scale call - linear scaling 0-32767 -> 0-100]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.11)AOI_Scale(Scale_T,Scale_RawVal,0,32767,0.0,100.0,Scale_Result);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment>
+<![CDATA[Chain 11: Scaled value in range -> DO.11]]>
+</Comment>
+<Text>
+<![CDATA[GRT(Scale_Result,10.0)LES(Scale_Result,90.0)OTE(Local:2:O.Data.11);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment>
+<![CDATA[Chain 12: OSR rising edge detection on DI.12]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.12)OSR(OSR_Store,OSR_Out);]]>
+</Text>
+</Rung>
+<Rung Number="4" Type="N">
+<Comment>
+<![CDATA[Chain 12: OSR pulse latches DO.12 on]]>
+</Comment>
+<Text>
+<![CDATA[XIC(OSR_Out)OTL(Local:2:O.Data.12);]]>
+</Text>
+</Rung>
+<Rung Number="5" Type="N">
+<Comment>
+<![CDATA[Chain 12: OSF falling edge detection on DI.12]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.12)OSF(OSF_Store,OSF_Out);]]>
+</Text>
+</Rung>
+<Rung Number="6" Type="N">
+<Comment>
+<![CDATA[Chain 12: OSF pulse unlatches DO.12]]>
+</Comment>
+<Text>
+<![CDATA[XIC(OSF_Out)OTU(Local:2:O.Data.12);]]>
+</Text>
+</Rung>
+<Rung Number="7" Type="N">
+<Comment>
+<![CDATA[Chain 13: Cross-program ref - load motor speed from recipe if init done]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Init_Done)XIC(Local:1:I.Data.13)MOV(Recipe_1.Speed,Motor_1.Speed);]]>
+</Text>
+</Rung>
+<Rung Number="8" Type="N">
+<Comment>
+<![CDATA[Chain 13: Load recipe temperature, set motor running/enabled]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.13)[MOV(Recipe_1.Temperature,Proc_Tmp) ,OTL(Motor_1.Running) ,OTL(Motor_1.Enabled) ];]]>
+</Text>
+</Rung>
+<Rung Number="9" Type="N">
+<Comment>
+<![CDATA[Chain 13: Temperature within limits AND motor speed valid -> DO.13]]>
+</Comment>
+<Text>
+<![CDATA[LIM(Alm_Temp.LowLimit,Proc_Tmp,Alm_Temp.HighLimit)GRT(Motor_1.Speed,0.0)LES(Motor_1.Speed,2000.0)OTE(Local:2:O.Data.13);]]>
+</Text>
+</Rung>
+<Rung Number="10" Type="N">
+<Comment>
+<![CDATA[Chain 13: Update program-scope Status (scope clash test)]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Local:1:I.Data.13)MOV(1,Status);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">
+<Description>
+<![CDATA[Main continuous task - all 16 chains]]>
+</Description>
+<ScheduledPrograms>
+<ScheduledProgram Name="MainProgram"/>
+<ScheduledProgram Name="ProcessControl"/>
+<ScheduledProgram Name="Diagnostics"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+<CommPorts>
+<SerialPort Channel="0" BaudRate="19200" Parity="No Parity" DataBits="8 Bits of Data" StopBits="1 Stop Bit" ComDriverId="DF1" RTSOffDelay="0" RTSSendDelay="0" ControlLine="No Handshake" RemoteModeChangeFlag="false" ModeChangeAttentionChar="27"
+ SystemModeCharacter="83" UserModeCharacter="85" DCDWaitDelay="0">
+<ASCII XONXOFFEnable="false" DeleteMode="0" EchoMode="0" TerminationChars="65293" AppendChars="2573" BufferSize="82"/>
+<DF1 DuplicateDetection="true" ErrorDetection="BCC Error" EmbeddedResponseEnable="Autodetect" DF1Mode="Pt to Pt" ACKTimeout="50" NAKReceiveLimit="3" ENQTransmitLimit="3" TransmitRetries="3" StationAddress="0" ReplyMessageWait="5" PollingMode="Message Based (slave can initiate messages)"
+ MasterMessageTransmit="Between station polls" NormalPollNodeFile="&lt;NA&gt;" NormalPollGroupSize="0" PriorityPollNodeFile="&lt;NA&gt;" ActiveStationFile="&lt;NA&gt;" SlavePollTimeout="3000" EOTSuppression="0" MaxStationAddress="31" TokenHoldFactor="1" EnableStoreFwd="false" StoreFwdFile="&lt;NA&gt;"
+/>
+</SerialPort>
+</CommPorts>
+<CST MasterID="0"/>
+<WallClockTime LocalTimeAdjustment="0" TimeZone="0"/>
+<Trends>
+<Trend Name="TempTrend" SamplePeriod="1000" NumberOfCaptures="1" CaptureSizeType="Samples" CaptureSize="100" StartTriggerType="No Trigger" StopTriggerType="No Trigger" TrendxVersion="5.2"/>
+</Trends>
+<QuickWatchLists>
+<QuickWatchList Name="SystemWatch">
+<WatchTag Specifier="Alarm_Word" Scope=""/>
+<WatchTag Specifier="Chain_Active" Scope=""/>
+<WatchTag Specifier="Motor_1.Speed" Scope=""/>
+<WatchTag Specifier="Scale_Result" Scope=""/>
+<WatchTag Specifier="ScanTime" Scope=""/>
+<WatchTag Specifier="System_Running" Scope=""/>
+</QuickWatchList>
+</QuickWatchLists>
+<TimeSynchronize Priority1="128" Priority2="128" PTPEnable="false"/>
+</Controller>
+</RSLogix5000Content>

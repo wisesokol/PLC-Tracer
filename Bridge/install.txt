@@ -1,0 +1,44 @@
+PLC Bridge — Установка на чистый Windows x64
+=============================================
+
+1. PYTHON
+   Установить Python 3.10+ (https://python.org)
+   При установке поставить галку "Add Python to PATH"
+
+2. ЗАВИСИМОСТИ
+   Открыть cmd / PowerShell и выполнить:
+
+   pip install websockets aiohttp aiohttp-cors
+
+3. ФАЙЛЫ
+   Скопировать папку Bridge\ на целевую машину.
+   Структура:
+     Bridge\
+       plc_bridge_500.py      — мост (headless, запуск из терминала)
+       plc_bridge_ui.py       — мост с GUI (tkinter, рекомендуется)
+       libplctag_2.6.16_windows_x64\
+         plctag.dll            — нативная библиотека для SLC 5/05
+       RECORDS\               — папка для записей (создаётся автоматически)
+
+   plctag.dll уже в комплекте, дополнительная установка не нужна.
+
+4. ЗАПУСК
+   GUI-режим (рекомендуется):
+     python plc_bridge_ui.py
+
+   Терминальный режим:
+     python plc_bridge_500.py --ip 192.168.1.10 --type slc
+     python plc_bridge_500.py --ip 192.168.1.10 --type logix
+
+   Без аргументов — интерактивная настройка:
+     python plc_bridge_500.py
+
+5. ПОРТЫ
+   WebSocket:  8765  (для plc-tracer-500)
+   HTTP REST:  8766  (для внешних запросов)
+
+   Если используется брандмауэр — разрешить входящие TCP 8765, 8766.
+
+6. КОНТРОЛЛЕРЫ
+   SLC 5/05, MicroLogix  → --type slc  (libplctag)
+   ControlLogix, CompactLogix → --type logix (libplctag)

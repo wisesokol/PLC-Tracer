@@ -1,0 +1,1258 @@
+                                      L552.RSS
+                                   Data File List
+Name        Number       Type      Scope     Debug      Words   Elements        Last
+
+OUTPUT        0  O       Global    No        3       1  O:0
+INPUT         1  I       Global    No        3       1  I:0
+STATUS        2  S       Global    No        0      83  S:82
+BINARY        3  B       Global    No        1       1  B3:0
+TIMER         4  T       Global    No        6       2  T4:1
+COUNTER       5  C       Global    No        3       1  C5:0
+CONTROL       6  R       Global    No        3       1  R6:0
+INTEGER       7  N       Global    No        1       1  N7:0
+FLOAT         8  F       Global    No        2       1  F8:0
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                           Data File O0 (bin)  --  OUTPUT
+
+Offset   15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0                              
+O:1.0     0  0  0  0  0  0  0  0  0  0  0  0  0  0  1  0   1746-OW16 - 16-Output (RLY)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary)                         Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                            Data File I1 (bin)  --  INPUT
+
+Offset   15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0                              
+I:2.0     0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0   1746-IB16 - 16-Input (SINK)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary)                         Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                           Data File S2 (hex)  --  STATUS
+M ain
+F irst Pass S:1/15 = No                                      D                                                             ay of the Week S:53L = Su
+I ndex Register S:24 = 0                                                                                                                DD / MM / YY
+F ree Running Clock S:4 = 0001-0101-1101-0110                                                                             Date S:39-37 = 21 / 4 / 19
+I ndex Across Data Files S:2/3 = No
+C IF Addressing Mode S:2/8 = 0                                                                                                        HH : MM : SS
+O nline Edits S:33/11 - S:33/12 = No online edits exist      T                                                             ime S:40-42 = 22 : 52 : 5
+P roc
+O S Catalog Number S:57 = 501                                                     User Program Type S:63 = 2049
+O S Series S:58 = C                      U                                         ser Program Functionality Index S:64 = 95
+O S FRS S:59 = 9                         U                                         ser RAM Size S:66 = 32
+P rocessor Catalog Number S:60 = 552     O                                         S Memory Size S:66 = 512
+P rocessor Series S:61 = C
+P rocessor FRN S:62 = 5
+E thernet Daughterboard Series S:9 = 3
+E thernet Daughterboard FRN S:10 = 33
+S can Times
+M aximum (x10 ms) S:22 = 1
+A verage (x10 ms) S:23 = 1
+C urrent (x10 ms) S:3 (low byte) = 0
+W atchdog (x10 ms) S:3 (high byte) = 10
+L ast 1ms Scan Time S:35 = 1
+S can Toggle Bit S:33/9 = 0
+T ime Base Selection S:33/13 = 0
+M ath
+M ath Overflow Selected S:2/14 = 0            M                                              ath Register (lo word) S:13 = 0
+O verflow Trap S:5/0 = 0                                                                    Math Register (high word) S:14-S:13 = 0
+C arry S:0/0 = 0                              M                                              ath Register (32 Bit) S:14-S:13 = 0
+O verflow S:0/1 = 0
+Z ero Bit S:0/2 = 0
+S ign Bit S:0/3 = 0
+F loating Point Flag Disable S:34/2 = 0
+I O
+I/O Interrupt Executing S:32 = 0              Interrrupt Latency Control S:33/8 = 0
+                                              Event Interrupt 10 uS Time Stamp S:44 = 
+I /O Slot Enables: S:11  S:12
+0                10               20             30
+11111111       11111111       11111111       11111111
+I /O Slot Interrupt Enables: S:27  S:28
+0                10               20             30
+11111111       11111111       11111111       11111111
+I /O Slot Interrupt Pending: S:25  S:26
+0                10               20             30
+00000000       00000000       00000000       00000000
+C han 0
+P rocessor Mode S:1/0- S:1/4 = Remote Run
+C hannel Mode S:33/3 = 1                      D                                              TR Control Bit S:33/14 = 0
+C omms Active S:33/4 = 0                                                                    DTR Force Bit S:33/15 = 0
+I ncoming Cmd Pending S:33/0 = 0              O                                              utgoing Msg Cmd Pending S:33/2 = 0
+M sg Reply Pending S:33/1 = 0                                                               Comms Servicing Sel S:33/5 = 0
+                                             M                                              sg Servicing Sel S:33/6 = 0
+                                             M                                              odem Lost S:5/14 = 1
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                           Data File S2 (hex)  --  STATUS
+C han 1
+P rocessor Mode S:1/0- S:1/4 = Remote Run
+C omms Active S:1/7 = 1                       O                                              utgoing Msg Cmd Pending S:2/7 = 0
+I ncoming Cmd Pending S:2/5 = 0                                                             Comms Servicing Sel S:2/15 = 1
+M sg Reply Pending S:2/6 = 0                                                                Msg Servicing Sel S:33/7 = 0
+D H485 Gateway Disable Bit S:34/0 = 0
+D F1 Gateway Enable Bit S:34/5 = 0
+D ebug
+S uspend Code S:7 = 0                         T                                              est Single Step Breakpoint
+S uspend File S:8 = 0                         R                                              ung # S:18 = 0
+C ompiled For Single Step S:2/4 = Yes         F                                              ile # S:19 = 0
+F ault/Powerdown                                                                            Test Single Step
+F ault/Powerdown (Rung #) S:20 = 0            R                                              ung # S:16 = 0
+( File #) S:21 = 0                            F                                              ile # S:17 = 2
+E rrors
+F ault Override At Power Up S:1/8 = 0         A                                              SCII String Manipulation error S:5/15 = 
+S tartup Protection Fault S:1/9 = 0           F                                              ault Routine S:29 = 0
+M ajor Error Halt S:1/13 = 0                  M                                              ajor Error S:6 = 0h
+O verflow Trap S:5/0 = 0
+C ontrol Register Error S:5/2 = 0                                                           Error Description:
+M ajor Error Executing User Fault Rtn. S:5/3 = 0
+M 0/M1 Referenced On Disabled Slot S:5/4 = 0
+B attery Low S:5/11 = 0
+F ault/Powerdown (Rung #) S:20 = 0
+( File #) S:21 = 0
+
+
+S TI
+S etpoint (x10ms) S:30 = 0                    R                                              esolution Select Bit S:2/10 = 0
+F ile Number S:31 = 0                                                                       Executing Bit S:2/2 = 0
+1 0 uS Time Stamp S:43 = 0                    O                                              verflow Bit S:5/10 = 0
+P ending Bit S:2/0 = 0                        L                                              ost S:36/9 = 0
+E nable Bit S:2/1 = 1                                                                       Interrrupt Latency Control S:33/8 = 0
+D II
+P reset S:50 = 0                              F                                              ile Number S:46 = 0
+A ccumulator S:52 = 0                                                                       Slot Number S:47 = 0
+P ending Bit S:2/11 = 0                       B                                              it Mask S:48 = 0h
+E nable Bit S:2/12 = 1                                                                      Compare Value S:49 = 0h
+E xecuting Bit S:2/13 = 0                     R                                              eturn Mask S:51 = 0h
+R econfiguration Bit S:33/10 = 0                                                            Last Scan Time (x1 ms) S:55 = 0
+O verflow Bit S:5/12 = 0                                                                    Max Observed Scan Time (x1 ms) S:56 = 0
+L ost S:36/8 = 0                              I                                              nterrrupt Latency Control S:33/8 = 0
+1 0 uS Time Stamp S:45 = 0
+P rotection
+D eny Future Access S:1/14 = No
+M em Module
+M emory Module Loaded On Boot S:5/8 = 0
+P assword Mismatch S:5/9 = 0
+L oad Memory Module On Memory Error S:1/10 = 0
+L oad Memory Module Always S:1/11 = 0
+L oad Memory Module and RUN S:1/12 = 0
+P rogram Compare S:2/9 = 0
+D ata File Overwrite Protection Lost S:36/10 = 0
+F orces
+F orces Enabled S:1/5 = No
+F orces Installed S:1/6 = No
+
+
+Page 2                                            Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                           Data File B3 (bin)  --  BINARY
+
+Offset   15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0   (Symbol) Description       
+B3:0      0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary)                         Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                               Data File T4  --  TIMER
+
+Offset   EN TT DN     BASE    PRE    ACC  (Symbol) Description                        
+T4:0      0  0  0  1.0 sec     10      0  
+T4:1      0  0  0  1.0 sec     10     10  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:16                                      L552.RSS
+                              Data File C5  --  COUNTER
+
+Offset   CU CD DN OV UN UA    PRE    ACC  (Symbol) Description                        
+C5:0      0  0  0  0  0  0      0      0  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                              Data File R6  --  CONTROL
+
+Offset   EN EU DN EM ER UL IN FD    LEN    POS  (Symbol) Description                  
+R6:0      0  0  0  0  0  0  0  0      0      0  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File N7 (dec)  --  INTEGER
+
+Offset        0      1      2      3      4      5      6      7      8      9        
+N7:0          0 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Decimal)                        Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                               Data File F8  --  FLOAT
+
+Offset               0             1             2             3             4        
+F8:0                 0 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1                                            Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File O0  --  OUTPUT Usage
+
+Offset    FW 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0                          
+O:1.0         .  .  .  .  .  .  .  .  .  .  .  X  X  X  X  X   1746-OW16 - 16-Output (
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                            Data File I1  --  INPUT Usage
+
+Offset    FW 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0                          
+I:2.0         .  .  .  .  .  .  .  .  .  .  .  .  .  X  X  X   1746-IB16 - 16-Input (S
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File S2  --  STATUS Usage
+
+Offset     0   1   2   3   4   5   6   7   8   9                                      
+S:0        .   .   .   .   .   .   .   .   .   . 
+S:10       .   .   .   .   .   .   .   .   .   . 
+S:20       .   .   .   .   .   .   .   .   .   . 
+S:30       .   .   .   .   .   .   .   .   .   . 
+S:40       .   .   .   .   .   .   .   .   .   . 
+S:50       .   .   .   .   .   .   .   .   .   . 
+S:60       .   .   .   .   .   .   .   .   .   . 
+S:70       .   .   .   .   .   .   .   .   .   . 
+S:80       .   .   . 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Element Only)                   Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File B3  --  BINARY Usage
+
+Offset    FW 15 14 13 12 11 10  9  8  7  6  5  4  3  2  1  0   (Symbol) Description   
+B3:0          .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  .  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                            Data File T4  --  TIMER Usage
+
+Offset    FW EN TT DN     BASE    PRE    ACC  (Symbol) Description                    
+T4:0       W  .  .  X        .      .      .  
+T4:1       W  .  .  X        .      .      X  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File C5  --  COUNTER Usage
+
+Offset    FW CU CD DN OV UN UA    PRE    ACC  (Symbol) Description                    
+C5:0          .  .  .  .  .  .      .      .  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File R6  --  CONTROL Usage
+
+Offset    FW EN EU DN EM ER UL IN FD    LEN    POS  (Symbol) Description              
+R6:0          .  .  .  .  .  .  .  .      .      .  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Binary/Subelement)              Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                           Data File N7  --  INTEGER Usage
+
+Offset     0   1   2   3   4   5   6   7   8   9                                      
+N7:0       . 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Element Only)                   Thursday, April 16, 2026 - 20:53:17                                      L552.RSS
+                            Data File F8  --  FLOAT Usage
+
+Offset     0   1   2   3   4                                                          
+F8:0       . 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Page 1     (Radix Element Only)                   Thursday, April 16, 2026 - 20:53:17
