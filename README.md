@@ -15,6 +15,20 @@ Offline & Online ladder logic visualizer for Allen-Bradley SLC 500 / MicroLogix 
 - [Intro Presentation](https://youtu.be/5EIQuA3fAio)
 - [Video about Functionality](https://youtu.be/EdFXSBzqMIg)
 
+PLC-Tracer is a free, browser-based diagnostic tool for Allen-Bradley PLCs 
+(ControlLogix, CompactLogix, MicroLogix, and PLC-5). It parses and visualizes 
+ladder logic using both offline and online data. The tool can record live 
+variable states as a graph via a direct PLC connection and play back sessions 
+offline.The goal of the project is not to replace Allen-Bradley software, 
+but to make industrial troubleshooting more affordable and intuitive. 
+By lowering the financial barrier, PLC-Tracer empowers maintenance engineers 
+and technicians—especially in developing countries—to diagnose equipment 
+efficiently without the burden of $3,000–$10,000 licensing costs. Built entirely with Claude.
+
+Important:
+For safety reasons, PLC-Tracer is strictly read-only — it monitors and 
+visualizes PLC data but cannot write values or modify the controller logic in any way.
+
 ### Problem and solution
 
 #### Problem
