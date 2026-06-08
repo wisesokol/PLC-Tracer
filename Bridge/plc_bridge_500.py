@@ -127,8 +127,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("bridge500")
 
 # ── Save-path debug switch (toggled from the UI) ──────────────────────────────
-# When True, ws_handler emits detailed traces around watch_only / read_now so we
-# can diagnose why a "save online project" round-trip ends up with stale values.
+# When True, the bridge emits detailed traces around the "save online project"
+# round-trip so we can diagnose stale values, missing tags AND request behaviour:
+#   • watch_only — payload / tagTypes / added-removed deltas
+#   • read_now   — requested vs returned, program-scope, missing, errors
+#   • _read_sync — request de-duplication and the word-read optimisation:
+#       requested → unique physical reads, bits grouped into words, handle
+#       cache reuse (proves no duplicate CIP/PCCC reads are issued) and the
+#       wall-clock time of the physical batch read.
 DEBUG_SAVE = False
 
 def set_debug_save(enabled: bool) -> None:
@@ -474,6 +480,15 @@ _LGX_COUNTER_MEMBERS = {
 # Bit-selector regex: TagName.17  or  Path.To.Tag.31
 _LGX_BIT_SEL_RE = _re.compile(r'^(?P<base>.+)\.(?P<bit>\d{1,2})$')
 
+# Local:N:I/O module struct field → (elem_size, reader).
+# Used for WHOLE-WORD reads of module I/O fields (e.g. Save Online Project).
+# Per-bit reads (Local:1:I.Data.14) are handled earlier by the bit-selector.
+_LOCAL_IO_FIELD_TYPES = {
+    'DATA':     (2, 'int'),    # INT  — digital input/output data word
+    'READBACK': (2, 'int'),    # INT  — output module read-back word
+    'FAULT':    (4, 'dint'),   # DINT — module fault word
+}
+
 
 def _infer_logix_type(name: str, explicit: str | None = None) -> tuple[int, str, int | None]:
     """Pick (elem_size, reader, bit_idx) for a Logix tag.
@@ -519,6 +534,19 @@ def _infer_logix_type(name: str, explicit: str | None = None) -> tuple[int, str,
         # TIMER / COUNTER bare struct — treat as DINT (48-byte UDT read would need sub-field)
         if base in ('TIMER', 'COUNTER', 'CONTROL'):
             return 4, 'dint', None
+
+    # Local:N:I/O module fields — size by field, never blind DINT.
+    # Covers whole-word reads issued by "Save Online Project":
+    #   Local:1:I.Data, Local:2:O.Data, Local:2:I.ReadBack  → INT  (2 bytes)
+    #   Local:1:I.Fault, Local:2:I.Fault                    → DINT (4 bytes)
+    # Without this, these read as DINT (4 bytes) → wrong int32 → fmtNum emits a
+    # 32-bit binary string into the .L5X instead of the correct 16-bit value.
+    # Placed after the explicit hint so a future tagTypes hint still wins.
+    m_local = _re.match(r'^Local:\d+:[IO]\.(\w+)', name, _re.IGNORECASE)
+    if m_local:
+        field = m_local.group(1).upper()
+        sz, rd = _LOCAL_IO_FIELD_TYPES.get(field, (2, 'int'))
+        return sz, rd, None
 
     # Default: assume DINT (4 bytes) — safest for Logix where most values are 32-bit
     return 4, 'dint', None
@@ -725,6 +753,9 @@ class LibplctagConnection:
         self._handles: dict[str, int] = {}        # addr → tag handle
         self._handle_meta: dict[str, dict] = {}   # addr → meta from _build_tag_path
         self._type_hints: dict[str, str] = {}     # addr → L5X dataType (from tracer)
+        # ── DEBUG_SAVE counters: prove handle cache reuse (no duplicate reads) ──
+        self._dbg_handle_hits = 0      # _get_or_create served from cache
+        self._dbg_handle_creates = 0   # _get_or_create created a new libplctag handle
 
     # ── type hints ---------------------------------------------------------
     def set_tag_types(self, type_map: dict):
@@ -823,32 +854,90 @@ class LibplctagConnection:
         This pattern lets libplctag (with allow_packing=1) combine multiple
         concurrent CIP reads into one Multi-Service Packet on the wire, which
         is what makes Logix reads of 100+ tags competitive with pylogix batch.
+
+        ── Word-read optimisation ────────────────────────────────────────────
+        Bit addresses that belong to the same atomic integer word
+        (Logix `Tag.N` / `Local:1:I.Data.N`, SLC `B3:0/N`, `I:1.0/N`, …) are
+        grouped and the *parent word* is read ONCE per cycle; every requested
+        bit is then extracted from that single value.  Benefits:
+          • Synchronicity — all bits of a word come from the same scan instant
+            (no torn reads where bit 0 is from scan N and bit 7 from scan N+1).
+          • Fewer CIP / PCCC round-trips (8 bits of a word → 1 read, not 8).
+        The result map still uses the original per-bit keys, so the tracer,
+        recorder and `.ndrec` format see no change whatsoever.
+
+        Extraction is byte-for-byte identical to the legacy per-bit path:
+          • Logix → read parent (elem_size 4) + plc_tag_get_bit(handle, bit)
+          • SLC   → read parent word (uint16) + (word >> bit) & 1
+        Structure bits (TIMER/COUNTER/CONTROL: .DN/.EN/T4:0/DN/T4:0/13/…) are
+        never promoted — they fall through to a direct read, unchanged.
         """
         results: dict[str, dict] = {}
-        pending: list[tuple[str, int]] = []  # (name, handle) still waiting
+        is_logix = (self.cfg.controller_type == 'logix')
+
+        # ── Plan: classify each requested tag ──────────────────────────────
+        bit_map: dict[str, tuple[str, int]] = {}  # orig_name -> (word_name, bit)
+        direct: list[str] = []                     # names read & returned as-is
+        phys_set: set[str] = set()                 # physical tags to actually read
+        for name in tag_names:
+            promo = self._promote_bit(name, is_logix)
+            if promo is None:
+                direct.append(name)
+                phys_set.add(name)
+            else:
+                word_name, bit = promo
+                bit_map[name] = (word_name, bit)
+                phys_set.add(word_name)
+
+        phys_names = list(phys_set)
+
+        if DEBUG_SAVE:
+            # Request de-duplication summary — proves the bridge never issues
+            # duplicate reads even when the tracer sends a word AND its bits, or
+            # the same address twice. `requested` is the raw count from the
+            # tracer; `dup_in_request` is how many collapsed via the phys_set.
+            n_req = len(tag_names)
+            n_uniq_req = len(set(tag_names))
+            n_words = len(set(w for w, _ in bit_map.values()))
+            log.info(
+                f"[DBG-SAVE] read plan: requested={n_req} "
+                f"(unique={n_uniq_req}, dup_in_request={n_req - n_uniq_req}) → "
+                f"physical_reads={len(phys_names)} "
+                f"[bits={len(bit_map)} grouped into {n_words} words, "
+                f"direct={len(direct)}]")
+        # Snapshot handle-cache counters + start time so the post-read summary
+        # can report reuse (no duplicate handle creation) and wall-clock cost.
+        _dbg_hits0 = self._dbg_handle_hits
+        _dbg_creates0 = self._dbg_handle_creates
+        _dbg_t0 = time.monotonic()
+
+        # ── Non-blocking batch read of the physical tag set ────────────────
+        phys_ok: dict[str, int] = {}      # phys_name -> handle (read complete)
+        phys_err: dict[str, dict] = {}    # phys_name -> error dict
+        pending: list[tuple[str, int]] = []
 
         # Kick off all reads in non-blocking mode (timeout=0 → returns PENDING)
-        for name in tag_names:
+        for name in phys_names:
             try:
                 handle = self._get_or_create(name)
                 if handle is None:
-                    results[name] = {"value": None, "type": "?",
-                                     "error": f"bad address: {name}", "ts": time.time()}
+                    phys_err[name] = {"value": None, "type": "?",
+                                      "error": f"bad address: {name}", "ts": time.time()}
                     continue
                 rc = _libplctag.plc_tag_read(handle, 0)
                 if rc == PLCTAG_STATUS_OK:
-                    results[name] = self._extract_result(handle, name)
+                    phys_ok[name] = handle
                 elif rc == PLCTAG_STATUS_PENDING:
                     pending.append((name, handle))
                 else:
                     err = _libplctag.plc_tag_decode_error(rc)
-                    results[name] = {"value": None, "type": "?",
-                                     "error": err.decode() if err else str(rc),
-                                     "ts": time.time()}
+                    phys_err[name] = {"value": None, "type": "?",
+                                      "error": err.decode() if err else str(rc),
+                                      "ts": time.time()}
                     self._drop_handle(name)
             except Exception as e:
-                results[name] = {"value": None, "type": "?",
-                                 "error": str(e), "ts": time.time()}
+                phys_err[name] = {"value": None, "type": "?",
+                                  "error": str(e), "ts": time.time()}
                 self._drop_handle(name)
 
         # Poll pending reads until all complete or overall timeout elapses
@@ -859,19 +948,19 @@ class LibplctagConnection:
                 try:
                     st = _libplctag.plc_tag_status(handle)
                 except Exception as e:
-                    results[name] = {"value": None, "type": "?",
-                                     "error": str(e), "ts": time.time()}
+                    phys_err[name] = {"value": None, "type": "?",
+                                      "error": str(e), "ts": time.time()}
                     self._drop_handle(name)
                     continue
                 if st == PLCTAG_STATUS_OK:
-                    results[name] = self._extract_result(handle, name)
+                    phys_ok[name] = handle
                 elif st == PLCTAG_STATUS_PENDING:
                     still.append((name, handle))
                 else:
                     err = _libplctag.plc_tag_decode_error(st)
-                    results[name] = {"value": None, "type": "?",
-                                     "error": err.decode() if err else str(st),
-                                     "ts": time.time()}
+                    phys_err[name] = {"value": None, "type": "?",
+                                      "error": err.decode() if err else str(st),
+                                      "ts": time.time()}
                     self._drop_handle(name)
             pending = still
             if pending:
@@ -879,11 +968,100 @@ class LibplctagConnection:
 
         # Any reads still pending at deadline → timeout
         for name, _h in pending:
-            results[name] = {"value": None, "type": "?",
-                             "error": "read timeout", "ts": time.time()}
+            phys_err[name] = {"value": None, "type": "?",
+                              "error": "read timeout", "ts": time.time()}
             self._drop_handle(name)
 
+        # ── Assemble results under the ORIGINAL requested keys ─────────────
+        for name in direct:
+            if name in phys_ok:
+                results[name] = self._extract_result(phys_ok[name], name)
+            else:
+                results[name] = phys_err.get(name, {
+                    "value": None, "type": "?", "error": "read failed", "ts": time.time()})
+
+        for name, (word_name, bit) in bit_map.items():
+            if word_name in phys_ok:
+                results[name] = self._extract_bit(phys_ok[word_name], bit, is_logix)
+            else:
+                e = phys_err.get(word_name)
+                results[name] = dict(e) if e else {
+                    "value": None, "type": "?", "error": "read failed", "ts": time.time()}
+
+        if DEBUG_SAVE:
+            # Post-read summary: timing + handle-cache reuse for this batch.
+            # hits  = handles served from cache (reused, no new CIP/PCCC tag)
+            # creates = brand-new handles built this batch (first-seen addresses)
+            dt_ms = (time.monotonic() - _dbg_t0) * 1000.0
+            hits = self._dbg_handle_hits - _dbg_hits0
+            creates = self._dbg_handle_creates - _dbg_creates0
+            log.info(
+                f"[DBG-SAVE] read done: {len(phys_names)} physical reads in "
+                f"{dt_ms:.0f} ms | handle_cache reuse={hits} new={creates} "
+                f"(total cached={len(self._handles)}) | "
+                f"ok={len(phys_ok)} err={len(phys_err)}")
+
         return results
+
+    @staticmethod
+    def _promote_bit(name: str, is_logix: bool):
+        """Decide whether `name` is a bit of an atomic integer word.
+
+        Returns (word_name, bit_index) when the bit can be read by fetching its
+        parent word, or None when the address must be read directly (single
+        tags, whole words, and structure bits like .DN/.EN/T4:0/DN/T4:0/13).
+
+        The returned word_name resolves to the exact same libplctag connection
+        string the legacy per-bit path would have used for that bit, so bit
+        extraction is identical — only the physical read is now shared.
+        """
+        if is_logix:
+            # Logix bit selector: "Tag.N" / "Local:1:I.Data.N" / "Arr[5].N".
+            # Logix arrays use [] indexing, so a trailing ".N" (0..31) is always
+            # a bit — matching _infer_logix_type's existing dint_bit handling.
+            m = _LGX_BIT_SEL_RE.match(name)
+            if not m:
+                return None
+            bit = int(m.group('bit'))
+            if not (0 <= bit <= 31):
+                return None
+            return (m.group('base'), bit)
+
+        # SLC / MicroLogix
+        parsed = _slc_parse_addr(name)
+        if not parsed:
+            return None
+        prefix, file_num, element, bit, sub = parsed
+        if bit is None:
+            return None                       # /DN, .ACC, bare word — not a numeric bit
+        if prefix in ('T', 'C', 'R'):
+            return None                       # timer/counter/control structures
+        if prefix in ('I', 'O'):
+            # I/O module word: I:<slot>.<word> (sub carries the word as 'W<n>')
+            word_idx = int(sub[1:]) if (isinstance(sub, str) and sub.startswith('W')) else 0
+            word_name = f"{prefix}:{element}.{word_idx}"
+        else:
+            # File word: B3:0, N7:0, S2:1, …  (canonical "<prefix><file>:<elem>")
+            word_name = f"{prefix}{file_num}:{element}"
+        return (word_name, bit)
+
+    @staticmethod
+    def _extract_bit(handle: int, bit: int, is_logix: bool) -> dict:
+        """Extract a single bit from an already-read parent-word handle.
+
+        Mirrors the legacy per-bit extractors exactly:
+          • Logix → plc_tag_get_bit (respects the tag's real buffer size)
+          • SLC   → (uint16 word >> bit) & 1
+        """
+        try:
+            if is_logix:
+                v = bool(_libplctag.plc_tag_get_bit(handle, bit))
+            else:
+                word = _libplctag.plc_tag_get_uint16(handle, 0)
+                v = bool((word >> bit) & 1)
+            return {"value": v, "type": "bool", "error": None, "ts": time.time()}
+        except Exception as e:
+            return {"value": None, "type": "?", "error": str(e), "ts": time.time()}
 
     def _extract_result(self, handle: int, name: str) -> dict:
         try:
@@ -897,6 +1075,7 @@ class LibplctagConnection:
     # ── handle cache ------------------------------------------------------
     def _get_or_create(self, name: str):
         if name in self._handles:
+            self._dbg_handle_hits += 1
             return self._handles[name]
         type_hint = self._type_hints.get(name)
         # Also try base name without "Program:Prog." prefix for hint lookup
@@ -914,6 +1093,7 @@ class LibplctagConnection:
             return None
         self._handles[name] = tag
         self._handle_meta[name] = meta or {}
+        self._dbg_handle_creates += 1
         return tag
 
     def _drop_handle(self, name: str):
@@ -1090,9 +1270,17 @@ async def ws_handler(websocket, poller, conn, cfg):
                     req_tags = msg.get("tags", [])
                     if DEBUG_SAVE:
                         prog_tags = [t for t in req_tags if t.startswith("Program:")]
+                        # Overlap with the live watch set — the background poller
+                        # may read these same tags in parallel. This is NOT a
+                        # duplicate-request bug: read_tags() serialises on the
+                        # connection lock and shares the handle cache, so the two
+                        # paths can never issue concurrent reads on one handle.
+                        overlap = sum(1 for t in req_tags if t in poller.watched)
                         log.info(
                             f"[DBG-SAVE] read_now request: count={len(req_tags)} "
+                            f"unique={len(set(req_tags))} "
                             f"program_scope={len(prog_tags)} "
+                            f"watch_overlap={overlap}/{len(poller.watched)} "
                             f"sample_in={req_tags[:5]} "
                             f"sample_prog={prog_tags[:5]} "
                             f"sample_tail={req_tags[-5:]}")
