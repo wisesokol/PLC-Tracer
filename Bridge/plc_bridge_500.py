@@ -95,6 +95,15 @@ try:
     except AttributeError:
         _LIBPLCTAG_HAS_RAW = False
 
+    # Runtime attribute update — retargets read_cache_ms on live handles
+    # when the poll interval changes (no handle re-creation needed).
+    try:
+        _libplctag.plc_tag_set_int_attribute.argtypes = [ctypes.c_int32, ctypes.c_char_p, ctypes.c_int]
+        _libplctag.plc_tag_set_int_attribute.restype  = ctypes.c_int
+        _LIBPLCTAG_HAS_SET_ATTR = True
+    except AttributeError:
+        _LIBPLCTAG_HAS_SET_ATTR = False
+
     LIBPLCTAG_OK = True
     PLCTAG_STATUS_OK = 0
     PLCTAG_STATUS_PENDING = 1
@@ -107,6 +116,7 @@ except Exception as _e:
     PLCTAG_ERR_TIMEOUT = -32
     _LIBPLCTAG_HAS_STRING = False
     _LIBPLCTAG_HAS_RAW = False
+    _LIBPLCTAG_HAS_SET_ATTR = False
     print(f"[WARN] libplctag not loaded: {_e}")
 
 try:
@@ -477,6 +487,30 @@ _LGX_COUNTER_MEMBERS = {
     'CU': 'BOOL', 'CD': 'BOOL', 'DN': 'BOOL', 'OV': 'BOOL', 'UN': 'BOOL',
 }
 
+# ── Atomic TIMER / COUNTER / CONTROL structure layout (Logix) ────────────────
+# A Logix TIMER/COUNTER/CONTROL is a 12-byte predefined structure:
+#   bytes 0-3  control DINT  (status bits live in the high bits)
+#   bytes 4-7  PRE / LEN     (DINT)
+#   bytes 8-11 ACC / POS     (DINT)
+# Reading the whole 12-byte element ONCE and extracting every member from that
+# single snapshot guarantees the members are mutually consistent (.DN can never
+# disagree with .ACC), which a per-member read cannot promise while the timer is
+# actively running on the PLC.
+_LGX_STRUCT_SIZE = 12
+# DINT word members → byte offset within the element
+_LGX_STRUCT_DINT_OFF = {'PRE': 4, 'ACC': 8, 'LEN': 4, 'POS': 8}
+# Status bit members → bit index within the control DINT (offset 0).
+# Bit positions differ per structure type, so they are keyed by type.
+_LGX_STRUCT_BITS = {
+    'TIMER':   {'EN': 31, 'TT': 30, 'DN': 29},
+    'COUNTER': {'CU': 31, 'CD': 30, 'DN': 29, 'OV': 28, 'UN': 27},
+    'CONTROL': {'EN': 31, 'EU': 30, 'DN': 29, 'EM': 28, 'ER': 27,
+                'UL': 26, 'IN': 25, 'FD': 24},
+}
+# Internal sentinel appended to a base tag name to key the shared 12-byte
+# structure handle (kept distinct from any real tag's per-scalar handle).
+_LGX_STRUCT_SENTINEL = "\x00STRUCT"
+
 # Bit-selector regex: TagName.17  or  Path.To.Tag.31
 _LGX_BIT_SEL_RE = _re.compile(r'^(?P<base>.+)\.(?P<bit>\d{1,2})$')
 
@@ -773,8 +807,52 @@ class LibplctagConnection:
                 # Invalidate existing handle — size may have changed
                 if name in self._handles:
                     self._drop_handle(name)
+                # Also drop the shared atomic-structure handle if one exists,
+                # so a changed TIMER/COUNTER hint rebuilds with the right layout.
+                struct_key = name + _LGX_STRUCT_SENTINEL
+                if struct_key in self._handles:
+                    self._drop_handle(struct_key)
         if changed:
             log.info(f"Received {changed} tag type hint(s) from tracer")
+
+    # ── poll interval / read cache -----------------------------------------
+    async def update_poll_interval(self, interval: float):
+        async with self._lock:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._update_poll_interval_sync, interval)
+
+    def _update_poll_interval_sync(self, interval: float):
+        """Re-target read_cache_ms on every cached handle.
+
+        The cache window (80% of the poll interval) is baked into each handle's
+        connection string at creation time, so a runtime set_interval would
+        otherwise leave existing handles serving values from the previous —
+        possibly much longer — cache window (e.g. 1 s → 0.2 s still cached
+        800 ms). plc_tag_set_int_attribute also expires the current cache;
+        handles that refuse the update are dropped and rebuilt with the right
+        cache on their next read.
+        """
+        self.cfg.poll_interval = interval
+        cache_ms = int(max(0, interval * 1000 * 0.8))
+        if _LIBPLCTAG_HAS_SET_ATTR:
+            failed = []
+            for name, h in self._handles.items():
+                try:
+                    rc = _libplctag.plc_tag_set_int_attribute(h, b"read_cache_ms", cache_ms)
+                    if rc != PLCTAG_STATUS_OK:
+                        failed.append(name)
+                except Exception:
+                    failed.append(name)
+            for name in failed:
+                self._drop_handle(name)
+            log.info(f"poll_interval={interval}s → read_cache_ms={cache_ms} "
+                     f"applied to {len(self._handles)} handle(s)"
+                     + (f", {len(failed)} dropped for rebuild" if failed else ""))
+        else:
+            n = len(self._handles)
+            self._destroy_all()
+            log.info(f"poll_interval={interval}s → DLL lacks set_int_attribute; "
+                     f"dropped {n} handle(s) to rebuild with read_cache_ms={cache_ms}")
 
     # ── lifecycle ---------------------------------------------------------
     async def connect(self) -> bool:
@@ -877,9 +955,22 @@ class LibplctagConnection:
 
         # ── Plan: classify each requested tag ──────────────────────────────
         bit_map: dict[str, tuple[str, int]] = {}  # orig_name -> (word_name, bit)
+        # orig_name -> (struct_key, member, struct_type) for atomic TIMER/COUNTER
+        struct_map: dict[str, tuple[str, str, str]] = {}
+        struct_base: dict[str, str] = {}           # struct_key -> base tag name
         direct: list[str] = []                     # names read & returned as-is
         phys_set: set[str] = set()                 # physical tags to actually read
         for name in tag_names:
+            # 1) TIMER/COUNTER/CONTROL member → read parent structure atomically
+            promo_s = self._promote_struct_member(name, is_logix)
+            if promo_s is not None:
+                base, member, stype = promo_s
+                struct_key = base + _LGX_STRUCT_SENTINEL
+                struct_map[name] = (struct_key, member, stype)
+                struct_base[struct_key] = base
+                phys_set.add(struct_key)
+                continue
+            # 2) Bit of an atomic integer word → read parent word once
             promo = self._promote_bit(name, is_logix)
             if promo is None:
                 direct.append(name)
@@ -899,11 +990,13 @@ class LibplctagConnection:
             n_req = len(tag_names)
             n_uniq_req = len(set(tag_names))
             n_words = len(set(w for w, _ in bit_map.values()))
+            n_structs = len(struct_base)
             log.info(
                 f"[DBG-SAVE] read plan: requested={n_req} "
                 f"(unique={n_uniq_req}, dup_in_request={n_req - n_uniq_req}) → "
                 f"physical_reads={len(phys_names)} "
                 f"[bits={len(bit_map)} grouped into {n_words} words, "
+                f"struct_members={len(struct_map)} grouped into {n_structs} structs, "
                 f"direct={len(direct)}]")
         # Snapshot handle-cache counters + start time so the post-read summary
         # can report reuse (no duplicate handle creation) and wall-clock cost.
@@ -988,6 +1081,15 @@ class LibplctagConnection:
                 results[name] = dict(e) if e else {
                     "value": None, "type": "?", "error": "read failed", "ts": time.time()}
 
+        for name, (struct_key, member, stype) in struct_map.items():
+            if struct_key in phys_ok:
+                results[name] = self._extract_struct_member(
+                    phys_ok[struct_key], member, stype)
+            else:
+                e = phys_err.get(struct_key)
+                results[name] = dict(e) if e else {
+                    "value": None, "type": "?", "error": "read failed", "ts": time.time()}
+
         if DEBUG_SAVE:
             # Post-read summary: timing + handle-cache reuse for this batch.
             # hits  = handles served from cache (reused, no new CIP/PCCC tag)
@@ -1045,6 +1147,65 @@ class LibplctagConnection:
             word_name = f"{prefix}{file_num}:{element}"
         return (word_name, bit)
 
+    def _promote_struct_member(self, name: str, is_logix: bool):
+        """Decide whether `name` is a member of an atomic TIMER/COUNTER/CONTROL.
+
+        Returns (base, member, struct_type) when `name` is `Base.MEMBER` and the
+        L5X type hint for `Base` is TIMER / COUNTER / CONTROL and MEMBER is a
+        valid member of that structure. Otherwise None (the tag is read directly).
+
+        Promoting timer members lets the bridge read the whole 12-byte structure
+        ONCE per cache window and extract every member (.PRE/.ACC/.EN/.TT/.DN …)
+        from that single snapshot. This guarantees the members are mutually
+        consistent — the historic "Save Online Project" bug, where a running
+        timer's .DN disagreed with its .ACC because the members were split across
+        two read batches read milliseconds apart, can no longer occur.
+        """
+        if not is_logix or '.' not in name:
+            return None
+        base, member = name.rsplit('.', 1)
+        member = member.upper()
+        # Need an explicit TIMER/COUNTER/CONTROL hint for the base tag — without
+        # it we cannot assume the 12-byte layout (a UDT could also have a .DN).
+        hint = self._type_hints.get(base)
+        if hint is None and base.startswith('Program:'):
+            parts = base.split('.', 1)
+            if len(parts) == 2:
+                hint = self._type_hints.get(parts[1])
+        if not hint:
+            return None
+        stype = _re.sub(r'\[.*$', '', hint.strip().upper())
+        if stype not in _LGX_STRUCT_BITS:
+            return None
+        # Member must be a real DINT word or a status bit of this structure type.
+        if member in _LGX_STRUCT_DINT_OFF or member in _LGX_STRUCT_BITS[stype]:
+            return (base, member, stype)
+        return None
+
+    @staticmethod
+    def _extract_struct_member(handle: int, member: str, stype: str) -> dict:
+        """Extract one member from an already-read 12-byte TIMER/COUNTER handle.
+
+        DINT members (.PRE/.ACC/.LEN/.POS) come from their byte offset; status
+        bits (.EN/.TT/.DN/.CU/…) from the control DINT at offset 0. Because all
+        members are pulled from the SAME physical read, they are guaranteed to
+        describe one consistent instant on the PLC.
+        """
+        member = member.upper()
+        try:
+            if member in _LGX_STRUCT_DINT_OFF:
+                off = _LGX_STRUCT_DINT_OFF[member]
+                v = int(_libplctag.plc_tag_get_int32(handle, off))
+                return {"value": v, "type": "int", "error": None, "ts": time.time()}
+            bit = _LGX_STRUCT_BITS.get(stype, {}).get(member)
+            if bit is None:
+                return {"value": None, "type": "?",
+                        "error": f"unknown member .{member}", "ts": time.time()}
+            v = bool(_libplctag.plc_tag_get_bit(handle, bit))
+            return {"value": v, "type": "bool", "error": None, "ts": time.time()}
+        except Exception as e:
+            return {"value": None, "type": "?", "error": str(e), "ts": time.time()}
+
     @staticmethod
     def _extract_bit(handle: int, bit: int, is_logix: bool) -> dict:
         """Extract a single bit from an already-read parent-word handle.
@@ -1077,6 +1238,20 @@ class LibplctagConnection:
         if name in self._handles:
             self._dbg_handle_hits += 1
             return self._handles[name]
+        # Atomic TIMER/COUNTER/CONTROL structure handle (sentinel-keyed):
+        # read the whole 12-byte element so every member shares one snapshot.
+        if name.endswith(_LGX_STRUCT_SENTINEL):
+            base = name[:-len(_LGX_STRUCT_SENTINEL)]
+            cache_ms = int(max(0, self.cfg.poll_interval * 1000 * 0.8))
+            path = _logix_tag_path(self.cfg, base, _LGX_STRUCT_SIZE, cache_ms)
+            tag = _libplctag.plc_tag_create(path.encode('utf-8'), _LIBPLCTAG_TIMEOUT)
+            if tag < 0:
+                return None
+            self._handles[name] = tag
+            self._handle_meta[name] = {'kind': 'lgx', 'reader': 'struct',
+                                       'elem_size': _LGX_STRUCT_SIZE}
+            self._dbg_handle_creates += 1
+            return tag
         type_hint = self._type_hints.get(name)
         # Also try base name without "Program:Prog." prefix for hint lookup
         if type_hint is None and name.startswith('Program:'):
@@ -1306,7 +1481,9 @@ async def ws_handler(websocket, poller, conn, cfg):
                     poller.values.update(vals)
                     await websocket.send(json.dumps({"type":"values","data":vals}))
                 elif cmd == "set_interval":
-                    poller.cfg.poll_interval = max(0.2, min(60, float(msg.get("interval",1))))
+                    iv = max(0.2, min(60, float(msg.get("interval", 1))))
+                    poller.cfg.poll_interval = iv
+                    await conn.update_poll_interval(iv)
                 elif cmd == "ping":
                     await websocket.send(json.dumps({"type":"pong","ts":time.time()}))
                 elif cmd == "get_status":
@@ -1381,6 +1558,7 @@ def build_http_app(conn, poller, cfg, log_buf):
             need_reconnect=True
         if "poll_interval" in data:
             cfg.poll_interval=max(0.2,min(60.0,float(data["poll_interval"]))); poller.cfg.poll_interval=cfg.poll_interval
+            await conn.update_poll_interval(cfg.poll_interval)
         if need_reconnect:
             conn.auto_reconnect=True; await conn.disconnect(); ok=await conn.connect()
             return web.json_response({"ok":ok,"reconnected":True,"error":conn.error})
