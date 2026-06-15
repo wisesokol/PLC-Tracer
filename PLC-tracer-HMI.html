@@ -213,12 +213,6 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .g-toolbar{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:5px;}
 .g-btn{font-family:var(--mono);font-size:11px;background:rgba(12,16,20,.9);border:1px solid var(--border);color:var(--text2);padding:5px 10px;cursor:pointer;border-radius:2px;letter-spacing:.06em;transition:all .15s;}
 .g-btn:hover{border-color:var(--acc);color:var(--acc);}
-.g-btn.live-on{background:#0a2018;border-color:var(--green);color:var(--green);}
-
-.g-poll{position:absolute;bottom:10px;right:10px;background:rgba(12,16,20,.9);border:1px solid var(--border);padding:8px 12px;border-radius:3px;display:flex;flex-direction:column;gap:4px;}
-.g-poll label{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:.08em;}
-.g-poll input[type=range]{width:120px;accent-color:var(--acc);}
-#poll-val{font-family:var(--mono);font-size:10px;color:var(--acc);}
 .g-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;pointer-events:none;}
 .g-empty-icon{font-size:50px;opacity:.07;}
 .g-empty-txt{font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.1em;}
@@ -391,10 +385,6 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
         Addresses are read in SLC format: <code>N7:0</code>, <code>B3/5</code>, <code>O:0/1</code>
       </div>
     </div>
-    <div class="lp-row">
-      <div class="lp-label">POLL INTERVAL (sec)</div>
-      <input class="lp-input" id="lp-interval" value="1.0" style="width:100px">
-    </div>
     <div id="lp-status"></div>
     <div class="lp-btns">
       <button class="lp-btn go" id="lp-go">CONNECT</button>
@@ -535,13 +525,6 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
         </div>
         <button class="g-btn" id="btn-fit">⊡ FIT</button>
         <button class="g-btn" id="btn-clear" style="color:#e05050;border-color:#3a1515;" title="Clear scene">✕ CLEAR</button>
-        <button class="g-btn" id="btn-live">◎ LIVE OFF</button>
-      </div>
-
-      <div class="g-poll" id="poll-ctrl" style="display:none">
-        <label>POLL INTERVAL</label>
-        <input type="range" id="poll-range" min="0.2" max="10" step="0.2" value="1.0">
-        <span id="poll-val">1.0s</span>
       </div>
     </div>
     <div id="xref-col">
@@ -5512,7 +5495,11 @@ canvas.addEventListener('wheel',e=>{
   scheduleRedraw();
 },{passive:false});
 
-// ── Keyboard zoom (+/- keys) — zoom towards center of canvas ──
+// ── Keyboard zoom (+/- keys) — zoom towards centre of the canvas under the
+// cursor: hover the HMI schematic ("граф с фоном") to zoom it, hover the
+// tracer graph to zoom the graph. Falls back to the graph when over neither.
+let _kbMx = -1, _kbMy = -1;
+window.addEventListener('mousemove', e=>{ _kbMx = e.clientX; _kbMy = e.clientY; });
 window.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'||e.target.isContentEditable) return;
   const plus  = e.key==='+'||e.key==='=';
@@ -5520,13 +5507,26 @@ window.addEventListener('keydown',e=>{
   if(!plus&&!minus) return;
   e.preventDefault();
   const rawF = plus ? 1.12 : 0.88;
-  const oldZ = cam.z;
-  const newZ = Math.max(.12, Math.min(3, oldZ * rawF));
-  const f = newZ / oldZ;
-  cam.x *= f;
-  cam.y *= f;
-  cam.z = newZ;
-  scheduleRedraw();
+  const hr = hmiCanvas.getBoundingClientRect();
+  const overHMI = hmiState.img && _kbMx>=hr.left && _kbMx<=hr.right && _kbMy>=hr.top && _kbMy<=hr.bottom;
+  if(overHMI){
+    const oldZ = hmiState.cam.z;
+    const newZ = Math.max(.05, Math.min(8, oldZ * rawF));
+    const f = newZ / oldZ;
+    hmiState.cam.x *= f;
+    hmiState.cam.y *= f;
+    hmiState.cam.z = newZ;
+    if(_hmiEditingText){ _hmiStyleTextEditor(_hmiEditingText); _hmiPositionTextEditor(); }
+    scheduleHMIRedraw();
+  } else {
+    const oldZ = cam.z;
+    const newZ = Math.max(.12, Math.min(3, oldZ * rawF));
+    const f = newZ / oldZ;
+    cam.x *= f;
+    cam.y *= f;
+    cam.z = newZ;
+    scheduleRedraw();
+  }
 });
 
 // ── TOOLTIP ──
@@ -6770,8 +6770,8 @@ function setConnUI(state,label,ctrl){
   document.getElementById('ctrl-name').textContent=ctrl?.name?`· ${ctrl.name}`:'';
   document.getElementById('btn-connect').style.display=state==='ok'?'none':'';
   document.getElementById('btn-disconnect').style.display=state==='ok'?'':'none';
-  document.getElementById('poll-ctrl').style.display=state==='ok'?'flex':'none';
-  if(state!=='ok'){liveOn=false;const b=document.getElementById('btn-live');b.className='g-btn';b.textContent='◎ LIVE OFF';}
+  // LIVE is implicit: on whenever the bridge connection is up (no toggle button)
+  liveOn = (state==='ok');
   // Show REC button only when connected
   const btnRec = document.getElementById('btn-rec');
   const recSep = document.getElementById('rec-sep');
@@ -6805,8 +6805,9 @@ function connectWS(url){
         'color:#0ff;font-weight:bold');
     }
     wsConn.send(watchOnlyPayload(watchTags));
-    const iv=parseFloat(document.getElementById('poll-range').value)||1;
-    wsConn.send(JSON.stringify({cmd:'set_interval',interval:iv}));
+    // Poll speed is owned entirely by the bridge (GUI/CLI/REST) — the HMI never
+    // sends set_interval, so an operator's rate limit stays put and the bridge
+    // can protect slow SLC/MicroLogix controllers from being over-polled.
   };
   wsConn.onmessage=e=>{
     try{
@@ -6904,10 +6905,6 @@ function mergeValues(data){
   if(sel&&selHit?.inst?.g===sel)updateTagDetailValue(sel);
   if(liveOn){scheduleRedraw();}
   // HMI indicators must reflect the latest liveValues whenever data arrives.
-  // Do NOT gate on `liveOn` — that flag only governs ladder-wire coloring and is
-  // never set by connectWS (only by the LIVE toggle / PRN load). A user who just
-  // connects to the bridge gets streaming values but liveOn=false, which used to
-  // freeze the indicators while the right-panel value readouts kept updating.
   // mergeValues only fires when connected and receiving values, so this is cheap.
   if(hmiState.indicators.length || hmiState.lines.some(l=>l.tag)){scheduleHMIRedraw();}
   // ── RECORDER: capture frame (v2 — delta + tagIndex compression) ──
@@ -7387,13 +7384,6 @@ document.getElementById('btn-clear').addEventListener('click',()=>{
   if(wsConn&&wsConn.readyState===WebSocket.OPEN)
     wsConn.send(JSON.stringify({cmd:'watch_only',tags:[]}));
 });
-document.getElementById('btn-live').addEventListener('click',()=>{
-  liveOn=!liveOn;
-  const b=document.getElementById('btn-live');
-  b.textContent=liveOn?'◉ LIVE ON':'◎ LIVE OFF';
-  b.className=liveOn?'g-btn live-on':'g-btn';
-  drawGraph();
-});
 document.getElementById('btn-rec').addEventListener('click', ()=>{
   if(!liveOn) return;
   recState==='recording' ? recStop() : recStart();
@@ -7410,12 +7400,6 @@ document.getElementById('lp-go').addEventListener('click',()=>{
 });
 document.getElementById('lp-cancel').addEventListener('click',()=>{
   document.getElementById('live-panel').classList.add('hidden');
-});
-document.getElementById('poll-range').addEventListener('input',e=>{
-  const v=parseFloat(e.target.value).toFixed(1);
-  document.getElementById('poll-val').textContent=v+'s';
-  if(wsConn&&wsConn.readyState===WebSocket.OPEN)
-    wsConn.send(JSON.stringify({cmd:'set_interval',interval:parseFloat(v)}));
 });
 // ── DEBUG TAG TRACING ──
 // Drop/upload a file named "debug_tags.txt" with one tag name per line.
@@ -8026,13 +8010,8 @@ function applyPRN(parsed, filename){
   document.getElementById('btn-prn-clear').style.display='';
   document.getElementById('btn-prn-lbl').style.color='var(--purple)';
   document.getElementById('btn-prn-lbl').style.borderColor='var(--purple)';
-  // Enable LIVE mode automatically so wires are coloured
-  if(!liveOn){
-    liveOn = true;
-    const b = document.getElementById('btn-live');
-    b.textContent='◉ LIVE ON';
-    b.className='g-btn live-on';
-  }
+  // Enable LIVE mode automatically so wires are coloured (PRN snapshot data)
+  liveOn = true;
 
   renderTagList();
   if(graphData){ buildLadderScene(); drawGraph(); }
@@ -9205,8 +9184,12 @@ function drawHMI(){
       else { fill = 'rgba(15,20,26,.6)'; ring = '#f0d060'; dashed = true; }
     } else {
       const s = indicatorState(ind);
-      if(s === 'on'){ fill = '#3ddc84'; ring = ringClr; glow = true; }
-      else if(s === 'off'){ fill = '#27313d'; ring = '#56707f'; }
+      // invert: swap which state shows green vs red (the "I" marker flags it)
+      const greenState = ind.invert ? 'off' : 'on';
+      if(s === 'on' || s === 'off'){
+        if(s === greenState){ fill = '#3ddc84'; ring = ringClr; glow = true; }
+        else { fill = '#e53935'; ring = '#ff7961'; }
+      }
       else { fill = 'rgba(15,20,26,.6)'; ring = '#f0d060'; dashed = true; } // no data
     }
 
@@ -9225,6 +9208,17 @@ function drawHMI(){
     if(dashed) hmiCtx.setLineDash([3,3]);
     hmiCtx.stroke();
     hmiCtx.setLineDash([]);
+
+    // inverted indicator: "I" marker inside the circle (dark on the bright
+    // on/off fills, yellow on the dim no-data fill so it stays legible)
+    if(ind.invert){
+      const ifs = Math.max(6, R * 1.25);
+      hmiCtx.font = 'bold ' + ifs + 'px Consolas,monospace';
+      hmiCtx.textAlign = 'center'; hmiCtx.textBaseline = 'middle';
+      hmiCtx.fillStyle = dashed ? '#f0d060' : '#0a1016';
+      hmiCtx.fillText('I', p.x, p.y + ifs*0.06);
+      hmiCtx.textAlign = 'left'; hmiCtx.textBaseline = 'alphabetic';
+    }
 
     // edit mode: faint outer dashed ring → indicates draggable
     if(!st.locked){
@@ -9696,9 +9690,13 @@ hmiCanvas.addEventListener('contextmenu', e=>{
   m.innerHTML =
     `<div class="him-hdr">${ind.instType} ${ind.tag}</div>` +
     `<div class="him-item" data-act="copy">⧉ COPY ADDRESS</div>` +
+    (hmiState.locked ? '' : `<div class="him-item" data-act="invert">${ind.invert ? '✓ ' : ''}⇄ INVERT GREEN/RED</div>`) +
     (hmiState.locked ? '' : `<div class="him-item danger" data-act="del">✕ DELETE INDICATOR</div>`);
   m.querySelector('[data-act="copy"]').addEventListener('click', ()=>{
     copyToClipboard(ind.tag); hmiHideIndMenu();
+  });
+  m.querySelector('[data-act="invert"]')?.addEventListener('click', ()=>{
+    ind.invert = !ind.invert; hmiHideIndMenu(); scheduleHMIRedraw();
   });
   m.querySelector('[data-act="del"]')?.addEventListener('click', ()=>{
     hmiHideIndMenu();
@@ -10119,6 +10117,7 @@ document.getElementById('hmi-btn-lock').addEventListener('click', ()=>{
 function _hmiUpdateLockBtn(){
   const b = document.getElementById('hmi-btn-lock');
   const hw = document.getElementById('hmi-wrap');
+  const sb = document.getElementById('sidebar');
   // Authoring buttons (IMAGE/FIT/size/SAVE HMI) are hidden via the `.edit` class
   // on #hmi-wrap (CSS `.hmi-edit-only`) — only EDIT + LOAD HMI stay in run mode.
   if(hmiState.locked){
@@ -10126,6 +10125,8 @@ function _hmiUpdateLockBtn(){
     b.title = 'Layout locked (run mode) — click to unlock editing';
     b.style.color = 'var(--yellow)'; b.style.borderColor = '#3a3510';
     if(hw) hw.classList.remove('edit');
+    // run mode: the tag panel isn't needed → collapse it to give the HMI more room
+    if(sb) sb.classList.add('collapsed');
     // leaving edit mode: drop any in-progress drawing / selection / editor
     _hmiLineCancel(); _hmiCloseTextEditor(true); hmiTool = 'select';
     if(hmiSel){ hmiSel = null; const pp = document.getElementById('hmi-prop'); pp.classList.remove('show'); pp.innerHTML=''; }
@@ -10135,7 +10136,11 @@ function _hmiUpdateLockBtn(){
     b.title = 'Edit mode — add text/lines, move & delete elements. Click to lock (run mode).';
     b.style.color = ''; b.style.borderColor = '';
     if(hw) hw.classList.add('edit');
+    // edit mode: reveal the tag panel so variables can be added to the HMI
+    if(sb) sb.classList.remove('collapsed');
   }
+  // sidebar width changed → reflow the canvases after the CSS width transition
+  setTimeout(()=>{ resize(); resizeHMI(); }, 240);
 }
 _hmiUpdateLockBtn(); // apply initial state — Locked (run mode) by default
 // Project-wide indicator size (circle radius + label/badge fonts),
@@ -10226,7 +10231,8 @@ function _hmiLayoutObj(includeImage){
     indicators: hmiState.indicators.map(i=>({
       id: i.id, tag: i.tag, prog: i.prog || null, instType: i.instType,
       rungRef: i.rungRef || null,
-      x: Math.round(i.x*10)/10, y: Math.round(i.y*10)/10
+      x: Math.round(i.x*10)/10, y: Math.round(i.y*10)/10,
+      invert: i.invert ? true : undefined
     })),
     texts: hmiState.texts.map(t=>({
       id: t.id, x: Math.round(t.x*10)/10, y: Math.round(t.y*10)/10,
@@ -10396,7 +10402,7 @@ function _hmiApplyLayout(obj){
     .map(i => ({
       id: i.id || ('ind-' + Date.now() + '-' + Math.floor(Math.random()*1e6)),
       tag: i.tag, prog: i.prog || null, instType: i.instType,
-      rungRef: i.rungRef || null, x: i.x, y: i.y
+      rungRef: i.rungRef || null, x: i.x, y: i.y, invert: !!i.invert
     }));
   hmiState.texts = (Array.isArray(obj.texts) ? obj.texts : [])
     .filter(t => t && typeof t.x === 'number' && typeof t.y === 'number')

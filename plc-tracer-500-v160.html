@@ -335,10 +335,6 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
         Addresses are read in SLC format: <code>N7:0</code>, <code>B3/5</code>, <code>O:0/1</code>
       </div>
     </div>
-    <div class="lp-row">
-      <div class="lp-label">POLL INTERVAL (sec)</div>
-      <input class="lp-input" id="lp-interval" value="1.0" style="width:100px">
-    </div>
     <div id="lp-status"></div>
     <div class="lp-btns">
       <button class="lp-btn go" id="lp-go">CONNECT</button>
@@ -445,8 +441,8 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 
     <div class="g-poll" id="poll-ctrl" style="display:none">
       <label>POLL INTERVAL</label>
-      <input type="range" id="poll-range" min="0.2" max="10" step="0.2" value="1.0">
-      <span id="poll-val">1.0s</span>
+      <input type="range" id="poll-range" min="0.2" max="10" step="0.2" value="0.2">
+      <span id="poll-val">0.2s</span>
     </div>
   </div>
 
@@ -6630,7 +6626,11 @@ function setConnUI(state,label,ctrl){
   document.getElementById('btn-connect').style.display=state==='ok'?'none':'';
   document.getElementById('btn-disconnect').style.display=state==='ok'?'':'none';
   document.getElementById('poll-ctrl').style.display=state==='ok'?'flex':'none';
-  if(state!=='ok'){liveOn=false;const b=document.getElementById('btn-live');b.className='g-btn';b.textContent='◎ LIVE OFF';}
+  // LIVE turns on automatically on a successful connect (and off when the link drops);
+  // the button stays usable as a manual toggle.
+  {const b=document.getElementById('btn-live');
+   if(state==='ok'){liveOn=true;b.className='g-btn live-on';b.textContent='◉ LIVE ON';scheduleRedraw();}
+   else{liveOn=false;b.className='g-btn';b.textContent='◎ LIVE OFF';}}
   // Show REC button only when connected
   const btnRec = document.getElementById('btn-rec');
   const recSep = document.getElementById('rec-sep');

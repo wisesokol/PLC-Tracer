@@ -247,7 +247,7 @@ class App(tk.Tk):
         r2.pack(fill=tk.X, pady=(0, 12))
 
         _lbl(r2, "Интервал, с").pack(side=tk.LEFT)
-        self._v_iv = tk.StringVar(value="1.0")
+        self._v_iv = tk.StringVar(value="0.2")
         _entry(r2, self._v_iv, width=6).pack(side=tk.LEFT, padx=(4, 20))
 
         self._v_rslinx = tk.BooleanVar(value=False)
@@ -453,7 +453,7 @@ class App(tk.Tk):
                 ip          = self._v_ip.get().strip(),
                 slot        = int(self._v_slot.get() or 0),
                 ctrl_type   = self._v_type.get(),
-                interval    = max(0.2, float(self._v_iv.get() or 1.0)),
+                interval    = max(0.2, float(self._v_iv.get() or 0.2)),
                 via_rslinx  = self._v_rslinx.get(),
                 records_dir = self._v_recdir.get().strip(),
             )

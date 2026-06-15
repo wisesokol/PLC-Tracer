@@ -177,7 +177,7 @@ class MemoryLogHandler(logging.Handler):
 
 DEFAULT_WS   = 8765
 DEFAULT_HTTP = 8766
-POLL_IV      = 1.0
+POLL_IV      = 0.2
 MAX_BATCH    = 40
 RECONNECT    = 5
 
@@ -1481,7 +1481,7 @@ async def ws_handler(websocket, poller, conn, cfg):
                     poller.values.update(vals)
                     await websocket.send(json.dumps({"type":"values","data":vals}))
                 elif cmd == "set_interval":
-                    iv = max(0.2, min(60, float(msg.get("interval", 1))))
+                    iv = max(0.2, min(60, float(msg.get("interval", 0.2))))
                     poller.cfg.poll_interval = iv
                     await conn.update_poll_interval(iv)
                 elif cmd == "ping":
