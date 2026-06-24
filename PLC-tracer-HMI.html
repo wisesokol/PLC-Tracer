@@ -9286,7 +9286,7 @@ function hmiLineColor(ln){
     currentRungProg = saved; return s;
   })();
   if(st === 'on')  return '#3ddc84';
-  if(st === 'off') return '#e05050';
+  if(st === 'off') return 'transparent';
   return ln.color || HMI_DEFAULT_LINE_COLOR; // no data → static colour
 }
 function drawHMILines(){
