@@ -14,6 +14,7 @@ Offline & Online ladder logic visualizer for Allen-Bradley SLC 500 / MicroLogix 
 
 - [Intro Presentation](https://youtu.be/5EIQuA3fAio)
 - [Video about Functionality](https://youtu.be/EdFXSBzqMIg)
+- [New Mode HMI (SCADA)](https://youtu.be/KupVDB3ziWQ?si=2AiPk1xtRZD8GsSl)
 
 PLC-Tracer is a free, browser-based diagnostic tool for Allen-Bradley PLCs 
 (ControlLogix, CompactLogix, MicroLogix, and PLC-5). It parses and visualizes 
@@ -141,6 +142,7 @@ Offline & Online визуализатор лестничной логики дл
 
 - [Intro Presentation](https://youtu.be/5EIQuA3fAio)
 - [Video about Functionality](https://youtu.be/EdFXSBzqMIg)
+- [Новый режим - HMI (SCADA)](https://youtu.be/KupVDB3ziWQ?si=2AiPk1xtRZD8GsSl)
 
 ### Проблема и решение
 
