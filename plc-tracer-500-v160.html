@@ -178,6 +178,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .rpanel.open .rpanel-tab-icon{transform:rotate(180deg);}
 .tag-detail-hdr{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg3);display:none;}
 .tdh-addr{font-family:var(--mono);font-size:12px;color:var(--acc);margin-bottom:2px;}
+.tdh-alias{font-family:var(--mono);font-size:11px;color:var(--text3);margin-bottom:2px;}
 .tdh-sym{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;}
 .tdh-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .tdh-type{font-family:var(--mono);font-size:10px;color:var(--text2);}
@@ -400,7 +401,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <!-- TAGS view -->
     <div id="sidebar-tags">
       <div class="srch-wrap">
-        <input class="srch" id="tsrch" placeholder="B3/5, N7:0, O:0..." autocomplete="off" spellcheck="false">
+        <input class="srch" id="tsrch" placeholder="Local:2:O.Data.1 O:1/4" autocomplete="off" spellcheck="false">
       </div>
       <div class="filter-tabs" id="ftabs">
         <span class="ftab on" data-f="ALL">ALL</span>
@@ -451,6 +452,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <div class="rpanel-inner">
     <div class="tag-detail-hdr" id="tdh">
       <div class="tdh-addr" id="tdh-addr">—</div>
+      <div class="tdh-alias" id="tdh-alias" style="display:none"></div>
       <div class="tdh-sym" id="tdh-sym"></div>
       <div class="tdh-meta">
         <span class="tdh-type" id="tdh-type"></span>
@@ -5788,9 +5790,17 @@ function showNodeDetails(n){
 
 function updateTagDetailHdr(addr){
   const hdr=document.getElementById('tdh');
+  // Scope-aware alias lookup: prefer program-qualified key, then bare (does not affect sym/type)
+  const qualKey = currentRungProg && !addr.startsWith(currentRungProg + '.')
+    ? `${currentRungProg}.${addr}` : null;
   const info=P?.syms[addr];
   const isSubFile = /^U3:\d+$/.test(addr);
   document.getElementById('tdh-addr').textContent = isSubFile ? `FILE ${addr.replace('U3:','')}` : addr;
+  // Alias sub-line: show physical Local:I/O address when the tag is an alias (L5X)
+  const aliasEl = document.getElementById('tdh-alias');
+  const aliasFor = (qualKey && P?.syms[qualKey]?.aliasFor) || info?.aliasFor || '';
+  if(aliasFor){ aliasEl.textContent = `→ ${aliasFor}`; aliasEl.style.display='block'; }
+  else { aliasEl.textContent=''; aliasEl.style.display='none'; }
   document.getElementById('tdh-sym').textContent=info?.sym||'';
   document.getElementById('tdh-type').textContent=typeLabel(addrType(addr))+(info?.desc?` · ${info.desc.slice(0,40)}`:'');
   hdr.style.display='block';
@@ -5970,6 +5980,14 @@ function showUsagesInPanel(norm, usages, displaySym, displayDesc){
   document.getElementById('tdh-addr').textContent = isLabel ? norm.slice(8) : norm;
   document.getElementById('tdh-sym').textContent  = displaySym || '';
   document.getElementById('tdh-type').textContent = isLabel ? 'JMP / LBL' : (typeLabel(addrType(norm)) + (displayDesc ? ` · ${displayDesc}` : ''));
+  // Alias sub-line: show physical Local:I/O address when the tag is an alias (L5X)
+  const aliasEl = document.getElementById('tdh-alias');
+  const usInfo = usages.find(u=>u.rg && u.rg.file)?.rg?.file?.split('/')[0] || currentRungProg || null;
+  const aliasFor = !isLabel ? (
+    (usInfo && P?.syms[`${usInfo}.${norm}`]?.aliasFor) || P?.syms[norm]?.aliasFor || ''
+  ) : '';
+  if(aliasFor){ aliasEl.textContent = `→ ${aliasFor}`; aliasEl.style.display='block'; }
+  else { aliasEl.textContent=''; aliasEl.style.display='none'; }
   hdr.style.display = 'block';
   if(!isLabel) updateTagDetailValue(norm);
 
@@ -6337,6 +6355,7 @@ function renderTagList(){
   entries = entries.filter(({addr, info})=>{
     const sym  = (info?.sym||'');
     const desc = (info?.desc||'');
+    const alias = (info?.aliasFor||''); // L5X: physical port e.g. "Local:1:I.Data.5"
     const nameToSearch = rungTagOriginal[addr] || addr;
     // SLC: also search in descMap (loaded from .SY6 / .DESC)
     const dm = !P.isL5X ? (descMap[addr.toUpperCase()] || descMap[normalizeAddr(addr).toUpperCase()]) : null;
@@ -6345,6 +6364,7 @@ function renderTagList(){
     if(f && !nameToSearch.toLowerCase().includes(f) &&
            !sym.toLowerCase().includes(f) &&
            !desc.toLowerCase().includes(f) &&
+           !alias.toLowerCase().includes(f) &&
            !dmSym.includes(f) &&
            !dmDesc.includes(f)) return false;
     if(activeFilter !== 'ALL'){
@@ -6411,15 +6431,23 @@ function renderTagList(){
       ${sym ? `<span class="tsym">${sym.slice(0,12)}</span>` : ''}
       ${valBadge}`;
 
-    // Description sub-row: desc OR aliasFor (whichever exists)
-    const descToShow = desc || (info?.aliasFor ? `→ ${info.aliasFor}` : '');
-    if(descToShow){
+    // Description sub-row(s): show description AND physical Local:I/O alias when both exist.
+    // Showing both makes a "local"-filtered result self-explanatory (the alias line is why it matched).
+    const aliasFor = info?.aliasFor || '';
+    if(desc){
       const descRow = document.createElement('div');
       descRow.className = 'titem-desc';
-      descRow.title = info?.aliasFor ? `AliasFor: ${info.aliasFor}` : desc;
-      descRow.textContent = descToShow.length > 48 ? descToShow.slice(0,46)+'…' : descToShow;
-      if(info?.aliasFor) descRow.style.color = 'var(--text3)';
+      descRow.title = desc;
+      descRow.textContent = desc.length > 48 ? desc.slice(0,46)+'…' : desc;
       div.appendChild(descRow);
+    }
+    if(aliasFor){
+      const aliasRow = document.createElement('div');
+      aliasRow.className = 'titem-desc';
+      aliasRow.title = `AliasFor: ${aliasFor}`;
+      aliasRow.textContent = `→ ${aliasFor}`;
+      aliasRow.style.color = 'var(--text3)';
+      div.appendChild(aliasRow);
     }
 
     div.addEventListener('click', e=>showTagMenu(div, addr, e));

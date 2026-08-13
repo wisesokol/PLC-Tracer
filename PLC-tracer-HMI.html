@@ -170,6 +170,20 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .him-item:hover{background:#152030;color:var(--text);}
 .him-item.danger{color:var(--red);}
 .him-hdr{font-family:var(--mono);font-size:10px;color:var(--acc);padding:6px 14px 4px;border-bottom:1px solid var(--border);background:#0f1a28;}
+/* ── line info card (double-click a line; works in run mode too) ── */
+#hmi-line-info{position:fixed;z-index:500;background:#0c1420;border:1px solid var(--border2);border-radius:5px;box-shadow:0 6px 28px rgba(0,0,0,.7);width:250px;display:none;flex-direction:column;overflow:hidden;}
+#hmi-line-info .hli-hdr{font-family:var(--mono);font-size:10px;color:var(--acc);letter-spacing:.08em;padding:7px 10px;border-bottom:1px solid var(--border);background:#0f1a28;display:flex;justify-content:space-between;align-items:center;}
+#hmi-line-info .hli-hdr .hli-x{cursor:pointer;color:var(--text3);font-size:13px;}
+#hmi-line-info .hli-hdr .hli-x:hover{color:var(--red);}
+#hmi-line-info .hli-body{padding:8px 10px;display:flex;flex-direction:column;gap:5px;}
+#hmi-line-info .hli-tag{font-family:var(--mono);font-size:12px;color:var(--text);word-break:break-all;}
+#hmi-line-info .hli-sym{font-family:var(--mono);font-size:11px;color:var(--acc);word-break:break-all;}
+#hmi-line-info .hli-meta{font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:.04em;}
+#hmi-line-info .hli-desc{font-size:11px;color:var(--text2);line-height:1.35;}
+#hmi-line-info .hli-val{font-family:var(--mono);font-size:11px;padding:5px 8px;border-radius:3px;text-align:center;letter-spacing:.05em;}
+#hmi-line-info .hli-acts{display:flex;gap:5px;margin-top:2px;}
+#hmi-line-info .hli-btn{flex:1;font-family:var(--mono);font-size:10px;background:#101a26;border:1px solid var(--border2);color:var(--text2);padding:5px;border-radius:3px;cursor:pointer;letter-spacing:.04em;}
+#hmi-line-info .hli-btn:hover{background:#152030;color:var(--acc);border-color:var(--acc);}
 
 /* ── HMI edit tools (text / line) — shown only in Edit mode ── */
 #hmi-tools{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:none;gap:5px;background:rgba(12,16,20,.92);border:1px solid var(--border);border-radius:4px;padding:5px;box-shadow:0 3px 16px rgba(0,0,0,.5);z-index:40;}
@@ -183,6 +197,11 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .hmi-tool.active{background:#0a2018;border-color:var(--acc);color:var(--acc);}
 #hmi-tools .sep{width:1px;background:var(--border);margin:2px 2px;}
 .hmi-tool-hint{font-family:var(--mono);font-size:10px;color:var(--text3);align-self:center;padding:0 6px;max-width:240px;}
+/* toolbar toggle styled like a tool button, but it is a checkbox (view aid, not a mode) */
+.hmi-tool-chk{font-family:var(--mono);font-size:11px;color:var(--text2);display:flex;align-items:center;gap:5px;padding:5px 9px;border:1px solid transparent;border-radius:3px;cursor:pointer;letter-spacing:.04em;user-select:none;white-space:nowrap;}
+.hmi-tool-chk:hover{color:var(--acc);border-color:var(--border2);}
+.hmi-tool-chk.on{background:#20100f;border-color:#7a2a22;color:#e08070;}
+.hmi-tool-chk input{margin:0;accent-color:#e53935;}
 
 /* ── HMI properties panel (selected text / line) ── */
 #hmi-prop{position:absolute;top:54px;right:12px;width:212px;background:rgba(12,18,26,.96);border:1px solid var(--border2);border-radius:5px;box-shadow:0 6px 28px rgba(0,0,0,.6);z-index:45;display:none;flex-direction:column;overflow:hidden;}
@@ -194,6 +213,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 #hmi-prop .pp-row{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;color:var(--text2);}
 #hmi-prop .pp-row label{flex:0 0 64px;color:var(--text3);letter-spacing:.04em;}
 #hmi-prop .pp-row input[type=text],#hmi-prop .pp-row input[type=number]{flex:1;min-width:0;background:#0a1018;border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:11px;padding:4px 6px;border-radius:2px;}
+#hmi-prop .pp-row select{flex:1;min-width:0;background:#0a1018;border:1px solid var(--border);color:var(--text);font-family:var(--mono);font-size:10px;padding:3px 4px;border-radius:2px;}
 #hmi-prop .pp-row input[type=color]{width:30px;height:24px;padding:0;border:1px solid var(--border);background:#0a1018;border-radius:2px;cursor:pointer;}
 #hmi-prop .pp-row input[type=number]{flex:0 0 56px;}
 #hmi-prop .pp-row .pp-grow{flex:1;}
@@ -202,6 +222,10 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 #hmi-prop .pp-del:hover{background:#2c1414;}
 #hmi-prop .pp-note{font-family:var(--mono);font-size:9px;color:var(--text3);line-height:1.4;}
 #hmi-prop input[type=checkbox]{accent-color:var(--acc);}
+/* inline checkbox riding next to a field (e.g. INV beside the line variable) */
+#hmi-prop .pp-row label.pp-chk{flex:0 0 auto;display:flex;align-items:center;gap:4px;color:var(--text2);cursor:pointer;letter-spacing:.04em;}
+#hmi-prop .pp-row label.pp-chk.off{color:var(--text3);opacity:.5;cursor:default;}
+#hmi-prop .pp-row label.pp-chk input{margin:0;}
 
 /* ── inline text editor overlay ── */
 #hmi-text-editor{position:absolute;z-index:60;display:none;box-sizing:border-box;background:rgba(10,16,24,.98);border:1px solid var(--acc);border-radius:2px;color:var(--text);font-family:var(--sans);padding:4px;resize:none;overflow:hidden;outline:none;line-height:1.25;white-space:pre-wrap;word-break:break-word;box-shadow:0 0 0 2px rgba(38,192,160,.25);}
@@ -228,6 +252,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .rpanel.open .rpanel-tab-icon{transform:rotate(180deg);}
 .tag-detail-hdr{padding:10px 12px;border-bottom:1px solid var(--border);flex-shrink:0;background:var(--bg3);display:none;}
 .tdh-addr{font-family:var(--mono);font-size:12px;color:var(--acc);margin-bottom:2px;}
+.tdh-alias{font-family:var(--mono);font-size:11px;color:var(--text3);margin-bottom:2px;}
 .tdh-sym{font-family:var(--sans);font-size:13px;font-weight:600;color:var(--text);margin-bottom:4px;}
 .tdh-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
 .tdh-type{font-family:var(--mono);font-size:10px;color:var(--text2);}
@@ -453,7 +478,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <!-- TAGS view -->
     <div id="sidebar-tags">
       <div class="srch-wrap">
-        <input class="srch" id="tsrch" placeholder="B3/5, N7:0, O:0..." autocomplete="off" spellcheck="false">
+        <input class="srch" id="tsrch" placeholder="Local:2:O.Data.1 O:1/4" autocomplete="off" spellcheck="false">
       </div>
       <div class="filter-tabs" id="ftabs">
         <span class="ftab on" data-f="ALL">ALL</span>
@@ -498,7 +523,9 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
       <button class="hmi-tool active" id="hmi-tool-select" data-tool="select" title="Select / move (V)">▲ SELECT</button>
       <div class="sep"></div>
       <button class="hmi-tool" id="hmi-tool-text" data-tool="text" title="Add text field — click on the schematic to place">T TEXT</button>
-      <button class="hmi-tool" id="hmi-tool-line" data-tool="line" title="Draw orthogonal line — click to add points, double-click / Esc to finish">⌐ LINE</button>
+      <button class="hmi-tool" id="hmi-tool-line" data-tool="line" title="Draw line — segments snap to 45°/90°; click to add points, double-click / Esc to finish">⌐ LINE</button>
+      <div class="sep"></div>
+      <label class="hmi-tool-chk" title="Editing aid: lines whose variable is OFF are drawn red instead of hidden, so they stay visible while authoring. Edit mode only — not saved with the layout."><input type="checkbox" id="hmi-chk-showlines">◉ SHOW ALL LINES</label>
       <span class="hmi-tool-hint" id="hmi-tool-hint"></span>
     </div>
     <div id="hmi-prop"></div>
@@ -506,6 +533,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <input type="file" id="fi-hmi-img" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" style="display:none">
     <input type="file" id="fi-hmi-json" accept=".json,.slc,.l5x,.L5X,.xml,.prn,.sy6" multiple style="display:none">
     <div id="hmi-ind-menu"></div>
+    <div id="hmi-line-info"></div>
   </div>
 
   <div class="rpanel" id="rpanel">
@@ -530,6 +558,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <div id="xref-col">
     <div class="tag-detail-hdr" id="tdh">
       <div class="tdh-addr" id="tdh-addr">—</div>
+      <div class="tdh-alias" id="tdh-alias" style="display:none"></div>
       <div class="tdh-sym" id="tdh-sym"></div>
       <div class="tdh-meta">
         <span class="tdh-type" id="tdh-type"></span>
@@ -5886,9 +5915,17 @@ function showNodeDetails(n){
 
 function updateTagDetailHdr(addr){
   const hdr=document.getElementById('tdh');
+  // Scope-aware alias lookup: prefer program-qualified key, then bare (does not affect sym/type)
+  const qualKey = currentRungProg && !addr.startsWith(currentRungProg + '.')
+    ? `${currentRungProg}.${addr}` : null;
   const info=P?.syms[addr];
   const isSubFile = /^U3:\d+$/.test(addr);
   document.getElementById('tdh-addr').textContent = isSubFile ? `FILE ${addr.replace('U3:','')}` : addr;
+  // Alias sub-line: show physical Local:I/O address when the tag is an alias (L5X)
+  const aliasEl = document.getElementById('tdh-alias');
+  const aliasFor = (qualKey && P?.syms[qualKey]?.aliasFor) || info?.aliasFor || '';
+  if(aliasFor){ aliasEl.textContent = `→ ${aliasFor}`; aliasEl.style.display='block'; }
+  else { aliasEl.textContent=''; aliasEl.style.display='none'; }
   document.getElementById('tdh-sym').textContent=info?.sym||'';
   document.getElementById('tdh-type').textContent=typeLabel(addrType(addr))+(info?.desc?` · ${info.desc.slice(0,40)}`:'');
   hdr.style.display='block';
@@ -6106,6 +6143,14 @@ function showUsagesInPanel(norm, usages, displaySym, displayDesc){
   document.getElementById('tdh-addr').textContent = isLabel ? norm.slice(8) : norm;
   document.getElementById('tdh-sym').textContent  = displaySym || '';
   document.getElementById('tdh-type').textContent = isLabel ? 'JMP / LBL' : (typeLabel(addrType(norm)) + (displayDesc ? ` · ${displayDesc}` : ''));
+  // Alias sub-line: show physical Local:I/O address when the tag is an alias (L5X)
+  const aliasEl = document.getElementById('tdh-alias');
+  const usInfo = usages.find(u=>u.rg && u.rg.file)?.rg?.file?.split('/')[0] || currentRungProg || null;
+  const aliasFor = !isLabel ? (
+    (usInfo && P?.syms[`${usInfo}.${norm}`]?.aliasFor) || P?.syms[norm]?.aliasFor || ''
+  ) : '';
+  if(aliasFor){ aliasEl.textContent = `→ ${aliasFor}`; aliasEl.style.display='block'; }
+  else { aliasEl.textContent=''; aliasEl.style.display='none'; }
   hdr.style.display = 'block';
   if(!isLabel) updateTagDetailValue(norm);
 
@@ -6473,6 +6518,7 @@ function renderTagList(){
   entries = entries.filter(({addr, info})=>{
     const sym  = (info?.sym||'');
     const desc = (info?.desc||'');
+    const alias = (info?.aliasFor||''); // L5X: physical port e.g. "Local:1:I.Data.5"
     const nameToSearch = rungTagOriginal[addr] || addr;
     // SLC: also search in descMap (loaded from .SY6 / .DESC)
     const dm = !P.isL5X ? (descMap[addr.toUpperCase()] || descMap[normalizeAddr(addr).toUpperCase()]) : null;
@@ -6481,6 +6527,7 @@ function renderTagList(){
     if(f && !nameToSearch.toLowerCase().includes(f) &&
            !sym.toLowerCase().includes(f) &&
            !desc.toLowerCase().includes(f) &&
+           !alias.toLowerCase().includes(f) &&
            !dmSym.includes(f) &&
            !dmDesc.includes(f)) return false;
     if(activeFilter !== 'ALL'){
@@ -6547,15 +6594,23 @@ function renderTagList(){
       ${sym ? `<span class="tsym">${sym.slice(0,12)}</span>` : ''}
       ${valBadge}`;
 
-    // Description sub-row: desc OR aliasFor (whichever exists)
-    const descToShow = desc || (info?.aliasFor ? `→ ${info.aliasFor}` : '');
-    if(descToShow){
+    // Description sub-row(s): show description AND physical Local:I/O alias when both exist.
+    // Showing both makes a "local"-filtered result self-explanatory (the alias line is why it matched).
+    const aliasFor = info?.aliasFor || '';
+    if(desc){
       const descRow = document.createElement('div');
       descRow.className = 'titem-desc';
-      descRow.title = info?.aliasFor ? `AliasFor: ${info.aliasFor}` : desc;
-      descRow.textContent = descToShow.length > 48 ? descToShow.slice(0,46)+'…' : descToShow;
-      if(info?.aliasFor) descRow.style.color = 'var(--text3)';
+      descRow.title = desc;
+      descRow.textContent = desc.length > 48 ? desc.slice(0,46)+'…' : desc;
       div.appendChild(descRow);
+    }
+    if(aliasFor){
+      const aliasRow = document.createElement('div');
+      aliasRow.className = 'titem-desc';
+      aliasRow.title = `AliasFor: ${aliasFor}`;
+      aliasRow.textContent = `→ ${aliasFor}`;
+      aliasRow.style.color = 'var(--text3)';
+      div.appendChild(aliasRow);
     }
 
     div.addEventListener('click', e=>showTagMenu(div, addr, e));
@@ -6638,7 +6693,8 @@ function isSyntheticAddr(a){ return /^U3:\d+$/i.test(a); }
 // Collect all real PLC tag addresses from the current graph:
 // — tag nodes (tag graph mode) + rung instruction tags (LADDER mode)
 function getWatchTags(){
-  if(!graphData && !hmiState.indicators.length && !hmiState.lines.some(l=>l.tag)) return [];
+  if(!graphData && !hmiState.indicators.length && !hmiState.lines.some(l=>l.tag)
+     && !hmiState.texts.some(_hmiTextHasRefs)) return [];
   const tags = new Set();
   const TIMER_I  = new Set(['TON','TOF','RTO']);
   const CTR_I    = new Set(['CTU','CTD']);
@@ -6694,6 +6750,10 @@ function getWatchTags(){
   // HMI lines with an assigned variable (green/red by bit state)
   hmiState.lines.forEach(ln=>{
     if(ln.tag) addTag(wireOf(normalizeAddr(ln.tag)), 'XIC', ln.prog || null);
+  });
+  // Tags embedded in HMI text fields as {TAG} placeholders
+  hmiState.texts.forEach(tx=>{
+    _hmiTextRefs(tx).forEach(r=> addTag(wireOf(normalizeAddr(r.tag)), 'MOV', r.prog));
   });
   // ── Online debug: log what tags are being watched for debug-tagged variables ──
   if(_dEntries.length){
@@ -6906,7 +6966,7 @@ function mergeValues(data){
   if(liveOn){scheduleRedraw();}
   // HMI indicators must reflect the latest liveValues whenever data arrives.
   // mergeValues only fires when connected and receiving values, so this is cheap.
-  if(hmiState.indicators.length || hmiState.lines.some(l=>l.tag)){scheduleHMIRedraw();}
+  if(hmiState.indicators.length || hmiState.lines.some(l=>l.tag) || hmiState.texts.some(_hmiTextHasRefs)){scheduleHMIRedraw();}
   // ── RECORDER: capture frame (v2 — delta + tagIndex compression) ──
   if(recState==='recording' && recSession){
     const ti    = recSession.tagIndex;
@@ -7005,6 +7065,8 @@ function _recKeySet(){
   });
   // Tags assigned to HMI lines
   hmiState.lines.forEach(ln=>{ if(ln.tag) addKey(normalizeAddr(ln.tag), 'XIC'); });
+  // Tags embedded in HMI text fields ({TAG} placeholders)
+  hmiState.texts.forEach(tx=>{ _hmiTextRefs(tx).forEach(r=> addKey(normalizeAddr(r.tag), 'MOV')); });
   return out;
 }
 
@@ -7175,6 +7237,7 @@ function loadProject(proj){
     hmiState.texts = [];
     hmiState.lines = [];
     hmiHover = null; hmiSel = null;
+    hideHMILineInfo();
     _hmiLineCancel(); _hmiCloseTextEditor(false);
     const pp = document.getElementById('hmi-prop'); if(pp){ pp.classList.remove('show'); pp.innerHTML=''; }
   }
@@ -9052,7 +9115,7 @@ let hmiState = {
   imgW: 0, imgH: 0,     // original image pixel dimensions
   indicators: [],       // [{id, tag, prog, instType, rungRef:{file,rungNum}, x, y}]
   texts: [],            // [{id, x, y, text, fontSize, color, bg|null}]  coords/size in ORIGINAL IMAGE px
-  lines: [],            // [{id, pts:[{x,y}...], color, width, tag|null, prog|null}]  orthogonal (right-angle) polyline, IMAGE px
+  lines: [],            // [{id, pts:[{x,y}...], color, width, tag|null, prog|null}]  polyline snapped to 45°/90°, IMAGE px
   cam: {x:0, y:0, z:1},
   locked: true,         // start in run mode (Edit OFF by default) — press EDIT to author
   indSize: 12,          // indicator circle radius + label/badge font base — ONE project-wide value in ORIGINAL IMAGE pixels (scales together with the background)
@@ -9067,11 +9130,15 @@ let hmiTool = 'select';
 let hmiSel = null;
 // Line being drawn: {pts:[{x,y}...], color, width} | null
 let hmiLineDraft = null;
-let _hmiLinePreview = null; // {x,y} live cursor (ortho-snapped) while drawing
+let _hmiLinePreview = null; // {x,y} live cursor (45°/90°-snapped) while drawing
 // Active drag descriptor while pointer is down in select mode
 let hmiDrag = null; // {kind:'text'|'lineVertex'|'line', obj, vIdx?, offX,offY, origPts?}
 let _hmiEditingText = null; // text object currently open in the inline editor
 const HMI_DEFAULT_LINE_COLOR = '#7aaccc';
+// Authoring aid: paint OFF lines red instead of hiding them, so they can still be
+// grabbed while laying out the schematic. Edit mode only, session only — never
+// stored in hmiState and never written to the layout file.
+let hmiShowAllLines = false;
 let _hmiDrawPending = false;
 
 function scheduleHMIRedraw(){
@@ -9273,24 +9340,47 @@ function drawHMI(){
 
   drawHMILineDraft();   // rubber-band of the line being drawn
   drawHMISelection();   // selection outline + drag handles (edit mode)
+  _hmiLineInfoRefresh();// keep an open line card in sync with live values
+  // Self-sustaining RAF chain, alive only while dashes are actually running
+  // (drawHMILines sets the flag). rAF is throttled by the browser when the tab
+  // is hidden, so an idle background page costs nothing.
+  if(_hmiAnimLive) scheduleHMIRedraw();
 }
 
-// ── Orthogonal line value → colour ──
+// ── Line value → colour ──
 // A line with a variable turns green when its bit is ON, red when OFF; with no
-// variable (or no data) it keeps its own static colour.
+// variable (or no data) it keeps its own static colour. `ln.invert` swaps the
+// two states (normally-closed contacts, "fault = 0" signals, …).
+// Effective on/off state of a line's variable ('on' | 'off' | anything else =
+// no data), with ln.invert already applied.
+function hmiLineState(ln){
+  if(!ln || !ln.tag) return null;
+  const saved = currentRungProg; currentRungProg = ln.prog || null;
+  const s = cellState({t:'XIC', g: ln.tag, operands: undefined});
+  currentRungProg = saved;
+  if(ln.invert && (s === 'on' || s === 'off')) return s === 'on' ? 'off' : 'on';
+  return s;
+}
 function hmiLineColor(ln){
   if(!ln.tag) return ln.color || HMI_DEFAULT_LINE_COLOR;
-  const st = (function(){
-    const saved = currentRungProg; currentRungProg = ln.prog || null;
-    const s = cellState({t:'XIC', g: ln.tag, operands: undefined});
-    currentRungProg = saved; return s;
-  })();
+  const st = hmiLineState(ln);
   if(st === 'on')  return '#3ddc84';
-  if(st === 'off') return 'transparent';
+  // OFF hides the line in run mode; in edit mode "SHOW ALL LINES" paints it red
+  if(st === 'off') return (hmiShowAllLines && !hmiState.locked) ? '#e53935' : 'transparent';
   return ln.color || HMI_DEFAULT_LINE_COLOR; // no data → static colour
 }
+// ── Marching dashes ("flow") on live lines ──
+// A line with `anim` shows dashes travelling from its first point to its last
+// one while its variable reads ON — the usual mnemonic for "product is moving
+// through this pipe". OFF / no data / no variable draw exactly as before.
+const HMI_ANIM_SPEED = 46;   // ORIGINAL IMAGE px per second the dashes travel
+const HMI_ANIM_BASE  = .3;   // opacity of the solid trace kept under the dashes
+let _hmiAnimLive = false;    // set by drawHMILines when a running line was painted
+function hmiLineAnimating(ln){ return !!(ln && ln.anim && ln.tag && hmiLineState(ln) === 'on'); }
 function drawHMILines(){
   const z = hmiState.cam.z;
+  const now = performance.now() / 1000;
+  _hmiAnimLive = false;
   for(const ln of hmiState.lines){
     if(!ln.pts || ln.pts.length < 2) continue;
     const clr = hmiLineColor(ln);
@@ -9302,13 +9392,109 @@ function drawHMILines(){
       hmiCtx.lineTo(p.x, p.y);
     }
     hmiCtx.lineCap = 'round'; hmiCtx.lineJoin = 'round';
-    hmiCtx.lineWidth = Math.max(1, (ln.width || 2) * z);
+    const w = Math.max(1, (ln.width || 2) * z);
+    hmiCtx.lineWidth = w;
     hmiCtx.strokeStyle = clr;
+    if(!hmiLineAnimating(ln)){ hmiCtx.stroke(); continue; }
+    // dim continuous trace, so the route stays readable between the dashes...
+    hmiCtx.globalAlpha = HMI_ANIM_BASE;
     hmiCtx.stroke();
+    hmiCtx.globalAlpha = 1;
+    // ...then the bright dashes riding along it. Negative offset = the pattern
+    // walks in the direction the line was drawn.
+    const dash = Math.max(3, (ln.width || 2) * 3.2 * z), gap = Math.max(3, dash * .9);
+    hmiCtx.setLineDash([dash, gap]);
+    hmiCtx.lineDashOffset = -((now * HMI_ANIM_SPEED * z) % (dash + gap));
+    hmiCtx.stroke();
+    hmiCtx.setLineDash([]);
+    hmiCtx.lineDashOffset = 0;
+    _hmiAnimLive = true;
   }
   hmiCtx.lineCap = 'butt'; hmiCtx.lineJoin = 'miter';
 }
 const HMI_TEXT_PAD = 4; // inner padding (ORIGINAL IMAGE px) inside a text box
+
+// ── {tag} placeholders inside text fields ──
+// A text field can embed live values:  "Level: {SILO_LVL} mm".
+// The optional suffix says how the SOURCE word is encoded — the field always
+// prints the decimal result:  {STATUS_WORD|u16}  {THUMBWHEEL|bcd}.
+// Without a suffix the field's own default (tx.fmt) applies.
+// No base conversion is offered because there is nothing to convert: parsePRN
+// and parseL5X both hand over plain decimal numbers (radix literals 16#/2#/8#
+// are already decoded at parse time), and the bridge returns numbers.
+const HMI_TXT_RE = /\{\s*([^{}|\s][^{}|]*?)\s*(?:\|\s*([A-Za-z0-9]+)\s*)?\}/g;
+const HMI_FMTS = ['auto','u16','bcd'];
+function _hmiTextHasRefs(tx){ return String(tx && tx.text || '').indexOf('{') >= 0; }
+// All tag references of a text field → [{tag, prog, fmt}] (for the watch list)
+function _hmiTextRefs(tx){
+  const out = [], s = String(tx && tx.text || '');
+  if(s.indexOf('{') < 0) return out;
+  HMI_TXT_RE.lastIndex = 0;
+  let m;
+  while((m = HMI_TXT_RE.exec(s))){
+    const sc = _hmiSplitScope(m[1]);
+    if(sc) out.push({tag: sc.tag, prog: sc.prog, fmt: (m[2] || '').toLowerCase()});
+  }
+  return out;
+}
+// Interpret a raw PLC value per `fmt` and return it as a DECIMAL string.
+//   auto — the value as delivered (already decimal everywhere in this app)
+//   u16  — read a 16-bit word as UNSIGNED: emitBinWord() composes words as
+//          signed int16, so status/packed words come out negative (S:4 = -28767
+//          for the bit pattern 1000-1111-1010-0001) — u16 shows 36769
+//   bcd  — unpack decimal digits from the nibbles: the word 0x1234 (= 4660)
+//          reads out as 1234, which is what a thumbwheel/display device means
+// A string that still carries a radix literal (16#1F, 2#1010, 8#17) is decoded
+// whatever fmt says — a safety net, not a normal path.
+function _hmiConvValue(v, fmt){
+  fmt = (fmt || 'auto').toLowerCase();
+  const s = String(v).trim(), clean = s.replace(/[\s_]/g, '');
+  let n = null;
+  const pre = /^(16|2|8)#(.+)$/.exec(clean);
+  if(pre){
+    n = parseInt(pre[2], pre[1] === '16' ? 16 : pre[1] === '2' ? 2 : 8);
+  } else if(typeof v === 'number'){
+    n = v;
+  } else if(typeof v === 'boolean'){
+    n = v ? 1 : 0;
+  } else if(/^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(clean)){
+    n = Number(clean);
+  }
+  if(n === null || !isFinite(n)) return s;           // not a number (text, ERR) → show as-is
+  // Raw 16-bit pattern behind a signed word — the basis for both u16 and bcd
+  const asWord = w => (Number.isInteger(w) && w < 0 && w >= -32768) ? w + 65536 : w;
+  if(fmt === 'u16') n = asWord(n);
+  // BCD needs a whole word; floats fall through to plain decimal untouched
+  if(fmt === 'bcd' && Number.isInteger(n)){
+    let x = asWord(n);
+    if(x >= 0){
+      let dec = 0, mul = 1;
+      while(x > 0){
+        const nib = x & 0xF;
+        if(nib > 9) return 'BCD?';                   // not valid packed BCD — say so instead of lying
+        dec += nib * mul; mul *= 10; x = Math.floor(x / 16);
+      }
+      n = dec;
+    }
+  }
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 1000) / 1000);
+}
+// Text with every {tag} replaced by its live value. Unknown tags keep their
+// literal {…} so a typo is visible; a known tag without data shows "—".
+function _hmiResolvedText(tx){
+  const s = String(tx && tx.text || '');
+  if(s.indexOf('{') < 0) return s;
+  return s.replace(HMI_TXT_RE, (full, name, fmt)=>{
+    const sc = _hmiSplitScope(name);
+    if(!sc) return full;
+    const lv = hmiResolve(sc.tag, sc.prog);
+    if(!lv) return full;
+    if(lv.error) return 'ERR';
+    if(lv.value === undefined || lv.value === null) return '—';
+    return _hmiConvValue(lv.value, (fmt || tx.fmt || 'auto'));
+  });
+}
+
 function drawHMITexts(){
   const z = hmiState.cam.z;
   for(const tx of hmiState.texts){
@@ -9357,14 +9543,15 @@ function _hmiWrapLines(text, maxW){
 // (no tx.w) keep the old auto-width, single-(\n)line behavior.
 function _hmiTextBox(tx){
   const fs = tx.fontSize || 14, lh = fs * 1.25, pad = HMI_TEXT_PAD;
+  const shown = _hmiResolvedText(tx); // {tag} placeholders → live values
   hmiCtx.save();
   hmiCtx.font = fs + 'px Bahnschrift, sans-serif';
   let lines, boxW;
   if(typeof tx.w === 'number' && tx.w > 0){
     boxW = tx.w;
-    lines = _hmiWrapLines(tx.text, Math.max(8, tx.w - 2*pad));
+    lines = _hmiWrapLines(shown, Math.max(8, tx.w - 2*pad));
   } else {
-    lines = String(tx.text || '').split('\n');
+    lines = shown.split('\n');
     let maxW = 0;
     for(const l of lines) maxW = Math.max(maxW, hmiCtx.measureText(l || ' ').width);
     boxW = maxW + 2*pad;
@@ -9500,11 +9687,21 @@ function hmiHitLine(sx, sy){
   }
   return null;
 }
-// Snap candidate image-space point so the segment from `prev` is purely H or V
-// (dominant-axis wins) — the rule that keeps every bend at a right angle.
-function _hmiOrthoSnap(prev, x, y){
+// Snap candidate image-space point so the segment from `prev` lands on the
+// nearest 45° step — 8 directions: H, V and the four diagonals. The cursor
+// vector is projected onto the chosen unit direction, which for the axis steps
+// reduces to the old "keep the dominant axis, flatten the other" rule.
+const HMI_SNAP_DIRS = (()=>{ const s = Math.SQRT1_2;
+  return [[1,0],[s,s],[0,1],[-s,s],[-1,0],[-s,-s],[0,-1],[s,-s]]; })(); // k·45°, screen Y down
+function _hmiSnapAngle(prev, x, y){
   if(!prev) return {x, y};
-  return (Math.abs(x - prev.x) >= Math.abs(y - prev.y)) ? {x, y: prev.y} : {x: prev.x, y};
+  const dx = x - prev.x, dy = y - prev.y;
+  if(!dx && !dy) return {x: prev.x, y: prev.y};
+  const k  = ((Math.round(Math.atan2(dy, dx) / (Math.PI/4)) % 8) + 8) % 8;
+  const [ux, uy] = HMI_SNAP_DIRS[k];
+  const t  = dx*ux + dy*uy;                       // projection length onto the ray
+  const r  = v => Math.round(v*10)/10;            // 0.1 px grid — same as the saved layout
+  return {x: r(prev.x + t*ux), y: r(prev.y + t*uy)};
 }
 
 // ── Tooltip (reuses #tt DOM, NOT showTT — that one is ladder-geometry bound) ──
@@ -9554,15 +9751,102 @@ function showHMITT(ind, cx, cy){
   tt.style.left = L + 'px'; tt.style.top = T + 'px';
 }
 
+// ── Line info card (double-click on a line) ──
+// A line is the only schematic object whose variable is invisible in run mode:
+// green/hidden shows the state but not WHAT drives it. Double-click opens a
+// card with the tag, its symbol/description and live value; it stays open and
+// keeps refreshing with the canvas until dismissed.
+let _hmiLineInfo = null; // line whose card is open | null
+// Chip describing the line's variable → {txt, bg, fg}; `txt` is PLAIN text, so
+// innerHTML callers must escape it. Shared by the card and the properties panel
+// so both always tell the same story.
+function _hmiLineStateChip(ln){
+  if(!ln.tag) return {txt:'no variable', bg:'#1a2230', fg:'var(--text3)'};
+  const saved = currentRungProg; currentRungProg = ln.prog || null;
+  const raw = cellState({t:'XIC', g: ln.tag, operands: undefined});
+  currentRungProg = saved;
+  const eff = hmiLineState(ln);
+  const inv = (ln.invert && (raw === 'on' || raw === 'off')) ? ` ⇄ line ${eff.toUpperCase()}` : '';
+  if(eff === 'on')  return {txt:`${ln.tag} = ${raw.toUpperCase()}${inv}`, bg:'#0a2018', fg:'var(--green)'};
+  if(eff === 'off') return {txt:`${ln.tag} = ${raw.toUpperCase()}${inv}`, bg:'#241010', fg:'var(--red)'};
+  return {txt:`${ln.tag} · no data`, bg:'#241f0a', fg:'var(--yellow)'};
+}
+function _hmiLineInfoBody(ln){
+  const chip = _hmiLineStateChip(ln);
+  if(!ln.tag){
+    return `<div class="hli-meta">This line has no variable — it is a static drawing.</div>` +
+           `<div class="hli-val" style="background:${chip.bg};color:${chip.fg}">${_hmiEsc(chip.txt)}</div>`;
+  }
+  const qual = ln.prog && !ln.tag.startsWith(ln.prog + '.') ? ln.prog + '.' + ln.tag : ln.tag;
+  const info = (P?.syms?.[qual]) || P?.syms?.[ln.tag] || null;
+  const dEntry = typeof getDesc === 'function' ? getDesc(normalizeAddr(ln.tag)) : null;
+  const sym  = info?.sym  || dEntry?.sym  || '';
+  const desc = info?.desc || dEntry?.desc || '';
+  const lv   = hmiResolve(ln.tag, ln.prog);
+  const meta = [];
+  if(info?.dataType) meta.push(info.dataType);
+  if(ln.prog) meta.push('scope: ' + ln.prog);
+  if(ln.invert) meta.push('inverted');
+  if(ln.anim) meta.push('flow anim');
+  if(lv && !lv.error && lv.value !== undefined && lv.value !== null) meta.push('value = ' + String(lv.value).slice(0, 16));
+  else if(lv && lv.error) meta.push('ERR: ' + lv.error);
+  return `<div class="hli-tag">${_hmiEsc(ln.tag)}</div>` +
+    (sym  ? `<div class="hli-sym">${_hmiEsc(sym)}</div>` : '') +
+    (meta.length ? `<div class="hli-meta">${_hmiEsc(meta.join('  ·  '))}</div>` : '') +
+    (desc ? `<div class="hli-desc">${_hmiEsc(desc)}</div>` : '') +
+    `<div class="hli-val" style="background:${chip.bg};color:${chip.fg}">${_hmiEsc(chip.txt)}</div>` +
+    `<div class="hli-acts">` +
+      `<button class="hli-btn" data-act="copy">⧉ COPY</button>` +
+      `<button class="hli-btn" data-act="usages">↗ USAGES</button>` +
+    `</div>`;
+}
+function showHMILineInfo(ln, cx, cy){
+  const el = document.getElementById('hmi-line-info');
+  _hmiLineInfo = ln;
+  el.innerHTML = `<div class="hli-hdr"><span>LINE</span><span class="hli-x" data-act="close">✕</span></div>` +
+                 `<div class="hli-body">${_hmiLineInfoBody(ln)}</div>`;
+  el.querySelector('[data-act="close"]').onclick = hideHMILineInfo;
+  const cp = el.querySelector('[data-act="copy"]');
+  if(cp) cp.onclick = ()=>{ copyToClipboard(ln.tag); hideHMILineInfo(); };
+  const us = el.querySelector('[data-act="usages"]');
+  if(us) us.onclick = ev=>{
+    const r = us.getBoundingClientRect();
+    const anchor = {getBoundingClientRect: () => r};
+    hideHMILineInfo();
+    showTagMenu(anchor, ln.tag, ev, null); // fileHint is for JMP/LBL only — a line tag never is one
+  };
+  el.style.display = 'flex';
+  const r = el.getBoundingClientRect();
+  let L = cx + 14, T = cy + 12;
+  if(L + r.width  > window.innerWidth  - 8) L = Math.max(8, cx - r.width  - 10);
+  if(T + r.height > window.innerHeight - 8) T = Math.max(8, cy - r.height - 10);
+  el.style.left = L + 'px'; el.style.top = T + 'px';
+}
+function hideHMILineInfo(){
+  if(!_hmiLineInfo) return;
+  _hmiLineInfo = null;
+  const el = document.getElementById('hmi-line-info');
+  el.style.display = 'none'; el.innerHTML = '';
+}
+// Called from drawHMI() so the open card tracks live values without its own timer
+function _hmiLineInfoRefresh(){
+  if(!_hmiLineInfo) return;
+  if(!hmiState.lines.includes(_hmiLineInfo)){ hideHMILineInfo(); return; } // line was deleted
+  const chip = _hmiLineStateChip(_hmiLineInfo);
+  const v = document.querySelector('#hmi-line-info .hli-val');
+  if(v){ v.textContent = chip.txt; v.style.background = chip.bg; v.style.color = chip.fg; }
+}
+
 // ── Mouse interaction ──
 hmiCanvas.addEventListener('mousedown', e=>{
   closeTagMenu(); // close usage menu on any canvas press (same as #gc behavior)
   hmiHideIndMenu();
+  hideHMILineInfo();
   if(e.button === 2) return; // contextmenu handler deals with right click
   if(e.button !== 0) return;
   const {x:cx, y:cy} = hmiPageToCanvas(e.clientX, e.clientY);
 
-  // LINE tool — each click drops an orthogonal vertex (snapped to the prev one)
+  // LINE tool — each click drops a vertex (45°/90°-snapped to the prev one)
   if(hmiTool === 'line' && hmiState.img && !hmiState.locked){ _hmiLineAddPoint(cx, cy); return; }
   // TEXT tool — drop a new text field at the cursor and open the inline editor
   if(hmiTool === 'text' && hmiState.img && !hmiState.locked){ _hmiAddText(cx, cy); return; }
@@ -9614,10 +9898,10 @@ hmiCanvas.addEventListener('mousemove', e=>{
     scheduleHMIRedraw();
     return;
   }
-  // LINE tool: live orthogonal rubber-band to the cursor
+  // LINE tool: live 45°/90°-snapped rubber-band to the cursor
   if(hmiTool === 'line' && hmiLineDraft && hmiLineDraft.pts.length){
     const w = hmiS2I(cx, cy);
-    _hmiLinePreview = _hmiOrthoSnap(hmiLineDraft.pts[hmiLineDraft.pts.length-1], w.x, w.y);
+    _hmiLinePreview = _hmiSnapAngle(hmiLineDraft.pts[hmiLineDraft.pts.length-1], w.x, w.y);
     hmiCanvas.style.cursor = 'crosshair';
     scheduleHMIRedraw();
     return;
@@ -9649,13 +9933,20 @@ hmiCanvas.addEventListener('mouseup', e=>{
   }
 });
 hmiCanvas.addEventListener('dblclick', e=>{
-  if(hmiState.locked) return;
   const {x:cx, y:cy} = hmiPageToCanvas(e.clientX, e.clientY);
-  if(hmiTool === 'line' && hmiLineDraft){ _hmiLineFinish(); return; }
-  if(hmiTool === 'select'){
-    const tx = hmiHitText(cx, cy);
-    if(tx){ hmiSelect('text', tx); _hmiOpenTextEditor(tx); }
+  if(!hmiState.locked){
+    if(hmiTool === 'line' && hmiLineDraft){ _hmiLineFinish(); return; }
+    if(hmiTool === 'select'){
+      const tx = hmiHitText(cx, cy);      // text editing wins over the line card
+      if(tx){ hmiSelect('text', tx); _hmiOpenTextEditor(tx); return; }
+    }
+    if(hmiTool !== 'select') return;      // TEXT/LINE tools: nothing else to do
   }
+  // Double-click a line → info card with its variable (run mode included; an
+  // OFF line is invisible but still hit-testable, which is exactly when you
+  // need to know what drives it)
+  const ln = hmiHitLine(cx, cy);
+  if(ln) showHMILineInfo(ln, e.clientX, e.clientY);
 });
 hmiCanvas.addEventListener('mouseleave', ()=>{
   hmiMouse.down = false; hmiMouse.dragInd = null; hmiDrag = null;
@@ -9665,6 +9956,7 @@ hmiCanvas.addEventListener('mouseleave', ()=>{
 hmiCanvas.addEventListener('wheel', e=>{
   e.preventDefault();
   if(!hmiState.img) return;
+  hideHMILineInfo(); // the schematic moves under the card — drop it
   const rawF = e.deltaY < 0 ? 1.12 : .88;
   const {x:cx, y:cy} = hmiPageToCanvas(e.clientX, e.clientY);
   const mx = cx - hmiCanvas.width/2, my = cy - hmiCanvas.height/2;
@@ -9725,6 +10017,7 @@ window.addEventListener('keydown', e=>{
     if(e.key === 'Backspace'){ e.preventDefault(); _hmiLineUndoPoint(); return; }
   }
   if(e.key === 'Escape'){
+    if(_hmiLineInfo){ hideHMILineInfo(); return; }
     if(hmiTool !== 'select'){ hmiSetTool('select'); return; }
     if(hmiSel){ hmiDeselect(); return; }
   }
@@ -9738,10 +10031,12 @@ window.addEventListener('keydown', e=>{
 document.addEventListener('click', e=>{
   const m = document.getElementById('hmi-ind-menu');
   if(m.style.display === 'flex' && !m.contains(e.target)) hmiHideIndMenu();
+  const li = document.getElementById('hmi-line-info');
+  if(_hmiLineInfo && !li.contains(e.target) && e.target !== hmiCanvas) hideHMILineInfo();
 });
 
 // ════════════════════════════════════════════════════════════════
-//  EDIT TOOLS — text fields & orthogonal lines (Edit mode only)
+//  EDIT TOOLS — text fields & 45°/90° lines (Edit mode only)
 // ════════════════════════════════════════════════════════════════
 function _hmiNewId(pfx){ return (crypto.randomUUID ? crypto.randomUUID() : pfx + Date.now() + '-' + Math.floor(Math.random()*1e6)); }
 function _hmiEsc(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -9764,7 +10059,7 @@ function hmiSetTool(tool){
   const hint = document.getElementById('hmi-tool-hint');
   if(hint) hint.textContent =
     tool === 'text' ? 'click on the schematic to place a text field' :
-    tool === 'line' ? 'click to add 90° points · dbl-click / Esc to finish · Backspace = undo' : '';
+    tool === 'line' ? 'click to add points (snap 45°/90°) · dbl-click / Esc to finish · Backspace = undo' : '';
   hmiCanvas.style.cursor = tool === 'line' ? 'crosshair' : (tool === 'text' ? 'text' : 'grab');
   scheduleHMIRedraw();
 }
@@ -9785,7 +10080,7 @@ function hmiDeselect(){
 // to set the width/height.
 function _hmiAddText(cx, cy){
   const w = hmiS2I(cx, cy);
-  const tx = { id:_hmiNewId('txt-'), x:w.x, y:w.y, w:120, h:0, text:'Text', fontSize:14, color:'#d4e8f0', bg:null };
+  const tx = { id:_hmiNewId('txt-'), x:w.x, y:w.y, w:120, h:0, text:'Text', fontSize:14, color:'#d4e8f0', bg:null, fmt:'auto' };
   hmiState.texts.push(tx);
   hmiSetTool('select');
   hmiSelect('text', tx);
@@ -9841,6 +10136,7 @@ function _hmiCloseTextEditor(commit){
   const ta = document.getElementById('hmi-text-editor');
   if(!_hmiEditingText){ ta.style.display = 'none'; return; }
   const tx = _hmiEditingText;
+  const hadRefs = _hmiTextHasRefs(tx);
   if(commit) tx.text = ta.value;
   _hmiEditingText = null;
   ta.style.display = 'none'; ta.value = '';
@@ -9850,17 +10146,20 @@ function _hmiCloseTextEditor(commit){
     if(i >= 0) hmiState.texts.splice(i, 1);
     if(hmiSel && hmiSel.obj === tx){ hmiSel = null; const pp = document.getElementById('hmi-prop'); pp.classList.remove('show'); pp.innerHTML=''; }
   }
+  // {TAG} placeholders may have been added/removed → resubscribe right away
+  // instead of waiting for the 2 s watch-list sync
+  if(hadRefs || _hmiTextHasRefs(tx)) _syncWatchList();
   scheduleHMIRedraw();
 }
 
-// ── Orthogonal lines ──
+// ── Lines (45°/90° polylines) ──
 function _hmiLineAddPoint(cx, cy){
   const w = hmiS2I(cx, cy);
   if(!hmiLineDraft){
     hmiLineDraft = { pts:[{x:w.x, y:w.y}], color: HMI_DEFAULT_LINE_COLOR, width:2 };
   } else {
     const last = hmiLineDraft.pts[hmiLineDraft.pts.length-1];
-    const s = _hmiOrthoSnap(last, w.x, w.y);
+    const s = _hmiSnapAngle(last, w.x, w.y);
     if(Math.abs(s.x - last.x) < 0.5 && Math.abs(s.y - last.y) < 0.5) return; // ignore zero-length
     hmiLineDraft.pts.push(s);
   }
@@ -9884,47 +10183,60 @@ function _hmiLineFinish(){
   const draft = hmiLineDraft;
   hmiLineDraft = null; _hmiLinePreview = null;
   if(pts.length < 2){ scheduleHMIRedraw(); return; }
-  const ln = { id:_hmiNewId('ln-'), pts, color: draft.color||HMI_DEFAULT_LINE_COLOR, width: draft.width||2, tag:null, prog:null };
+  const ln = { id:_hmiNewId('ln-'), pts, color: draft.color||HMI_DEFAULT_LINE_COLOR, width: draft.width||2, tag:null, prog:null, invert:false, anim:false };
   hmiState.lines.push(ln);
   hmiSetTool('select');
   hmiSelect('line', ln);
   _syncWatchList();
 }
-// Move a vertex while keeping every bend at a right angle. Endpoints snap to
-// their single neighbour's axis; interior vertices drag the shared coordinate
-// of both adjacent segments (which stay axis-aligned by construction).
+// Move a vertex while keeping the ANGLE of both adjacent segments. Endpoints
+// snap onto their single neighbour's 45° grid; for an interior vertex each
+// neighbour is shifted by the part of the drag that is perpendicular to its own
+// segment, so the segment slides sideways without rotating. For axis-aligned
+// segments this is exactly the old "share one coordinate" behaviour, and a 45°
+// bend now survives the drag the same way a 90° one does.
 function _hmiMoveVertex(ln, idx, nx, ny){
   const pts = ln.pts, p = pts[idx], prev = pts[idx-1], next = pts[idx+1];
   if(!prev && !next){ p.x = nx; p.y = ny; scheduleHMIRedraw(); return; }
-  if(!prev){ const s = _hmiOrthoSnap(next, nx, ny); p.x = s.x; p.y = s.y; scheduleHMIRedraw(); return; }
-  if(!next){ const s = _hmiOrthoSnap(prev, nx, ny); p.x = s.x; p.y = s.y; scheduleHMIRedraw(); return; }
-  const inH  = Math.abs(prev.y - p.y) <= Math.abs(prev.x - p.x); // incoming horizontal?
-  const outH = Math.abs(next.y - p.y) <= Math.abs(next.x - p.x); // outgoing horizontal?
+  if(!prev){ const s = _hmiSnapAngle(next, nx, ny); p.x = s.x; p.y = s.y; scheduleHMIRedraw(); return; }
+  if(!next){ const s = _hmiSnapAngle(prev, nx, ny); p.x = s.x; p.y = s.y; scheduleHMIRedraw(); return; }
+  const dx = nx - p.x, dy = ny - p.y;
+  const slide = nb => {                                  // keep segment nb→p parallel to itself
+    const sx = p.x - nb.x, sy = p.y - nb.y, l = Math.hypot(sx, sy);
+    if(!l){ nb.x += dx; nb.y += dy; return; }             // degenerate — carry it along
+    const ux = sx/l, uy = sy/l, t = dx*ux + dy*uy;        // component along the segment
+    nb.x += dx - t*ux; nb.y += dy - t*uy;                 // ...drop it, apply the rest
+  };
+  slide(prev); slide(next);
   p.x = nx; p.y = ny;
-  if(inH)  prev.y = ny; else prev.x = nx;
-  if(outH) next.y = ny; else next.x = nx;
   scheduleHMIRedraw();
 }
 function _hmiDeleteLine(ln){
   const i = hmiState.lines.indexOf(ln); if(i < 0) return;
+  if(_hmiLineInfo === ln) hideHMILineInfo();
   hmiState.lines.splice(i, 1);
   hmiDeselect();
   _syncWatchList();
 }
-// Assign a variable to a line (manual text entry). Best-effort scope detection;
-// the reliable path is dragging a tag from the ladder menu onto the line.
-function _hmiAssignLineTag(ln, raw){
-  raw = (raw || '').trim();
-  if(!raw){ ln.tag = null; ln.prog = null; _syncWatchList(); scheduleHMIRedraw(); return; }
-  let tag = raw, prog = null;
+// Split a hand-typed name into {tag, prog}: "MainProgram.Level" becomes a
+// program-scoped tag only when P.syms says that name really is program-scoped.
+// Best-effort — the reliable path is dragging a tag from the ladder menu.
+function _hmiSplitScope(raw){
+  raw = String(raw == null ? '' : raw).trim();
+  if(!raw) return null;
   const dot = raw.indexOf('.');
   if(dot > 0 && P && P.syms){
     const info = P.syms[raw];
-    if(info && info.scope && info.scope !== 'Controller' && info.scope !== '' && info.scope !== '?'){
-      prog = info.scope; tag = raw.slice(dot + 1);
-    }
+    if(info && info.scope && info.scope !== 'Controller' && info.scope !== '' && info.scope !== '?')
+      return {tag: normalizeAddr(raw.slice(dot + 1)), prog: info.scope};
   }
-  ln.tag = normalizeAddr(tag); ln.prog = prog;
+  return {tag: normalizeAddr(raw), prog: null};
+}
+// Assign a variable to a line (manual text entry).
+function _hmiAssignLineTag(ln, raw){
+  const sc = _hmiSplitScope(raw);
+  if(!sc){ ln.tag = null; ln.prog = null; ln.invert = false; ln.anim = false; _syncWatchList(); scheduleHMIRedraw(); return; } // no variable → invert/anim are meaningless
+  ln.tag = sc.tag; ln.prog = sc.prog;
   _syncWatchList(); scheduleHMIRedraw();
 }
 
@@ -9943,25 +10255,28 @@ function _hmiRenderTextProp(pp, tx){
       `<div class="pp-row"><label>Font px</label><input type="number" min="4" max="200" id="pp-tx-size" value="${tx.fontSize||14}"></div>` +
       `<div class="pp-row"><label>Color</label><input type="color" id="pp-tx-color" value="${_hmiToHex(tx.color||'#d4e8f0')}"><span class="pp-grow"></span></div>` +
       `<div class="pp-row"><label>BG fill</label><input type="checkbox" id="pp-tx-bgon" ${tx.bg?'checked':''}><input type="color" id="pp-tx-bg" value="${_hmiToHex(tx.bg||'#102030')}" ${tx.bg?'':'disabled'}></div>` +
-      `<div class="pp-note">double-click the field on the schematic to edit its text</div>` +
+      `<div class="pp-row"><label>Src fmt</label><select id="pp-tx-fmt">` +
+        ['auto|AUTO — value as read','u16|U16 — word as unsigned','bcd|BCD — packed digits']
+          .map(o=>{ const [v,t] = o.split('|'); return `<option value="${v}" ${(tx.fmt||'auto')===v?'selected':''}>${t}</option>`; }).join('') +
+      `</select></div>` +
+      (_hmiTextHasRefs(tx) ? `<div class="pp-state" style="background:#0d1a24;color:var(--blue)">${_hmiEsc(_hmiResolvedText(tx).replace(/\n/g,' ⏎ ').slice(0,60))}</div>` : '') +
+      `<div class="pp-note">double-click the field on the schematic to edit its text · <b>{TAG}</b> is replaced by the live value · <b>U16</b> reads a negative 16-bit word as unsigned, <b>BCD</b> unpacks nibble digits · per-tag override: <b>{TAG|bcd}</b></div>` +
       `<button class="pp-del" data-act="del">✕ DELETE TEXT</button>` +
     `</div>`;
   pp.querySelector('[data-act="close"]').onclick = ()=> hmiDeselect();
   pp.querySelector('[data-act="del"]').onclick   = ()=> _hmiDeleteText(tx);
   pp.querySelector('#pp-tx-size').oninput = e=>{ tx.fontSize = Math.max(4, Math.min(200, parseInt(e.target.value)||14)); if(_hmiEditingText===tx){ _hmiStyleTextEditor(tx); _hmiPositionTextEditor(); } scheduleHMIRedraw(); };
   pp.querySelector('#pp-tx-color').oninput = e=>{ tx.color = e.target.value; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); };
+  pp.querySelector('#pp-tx-fmt').onchange  = e=>{ tx.fmt = HMI_FMTS.includes(e.target.value) ? e.target.value : 'auto'; _hmiRenderProp(); scheduleHMIRedraw(); };
   const bgOn = pp.querySelector('#pp-tx-bgon'), bgC = pp.querySelector('#pp-tx-bg');
   bgOn.onchange = ()=>{ tx.bg = bgOn.checked ? bgC.value : null; bgC.disabled = !bgOn.checked; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); };
   bgC.oninput   = ()=>{ if(bgOn.checked){ tx.bg = bgC.value; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); } };
 }
+// Live state chip. Colour = what the LINE does; the text keeps showing the raw
+// tag value, with "⇄ line ON/OFF" spelled out when invert flips it.
 function _hmiLineStateRow(ln){
-  if(!ln.tag) return `<div class="pp-state" style="background:#1a2230;color:var(--text3)">no variable</div>`;
-  const saved = currentRungProg; currentRungProg = ln.prog || null;
-  const s = cellState({t:'XIC', g: ln.tag, operands: undefined});
-  currentRungProg = saved;
-  if(s === 'on')  return `<div class="pp-state" style="background:#0a2018;color:var(--green)">${_hmiEsc(ln.tag)} = ON</div>`;
-  if(s === 'off') return `<div class="pp-state" style="background:#241010;color:var(--red)">${_hmiEsc(ln.tag)} = OFF</div>`;
-  return `<div class="pp-state" style="background:#241f0a;color:var(--yellow)">${_hmiEsc(ln.tag)} · no data</div>`;
+  const chip = _hmiLineStateChip(ln);
+  return `<div class="pp-state" style="background:${chip.bg};color:${chip.fg}">${_hmiEsc(chip.txt)}</div>`;
 }
 function _hmiRenderLineProp(pp, ln){
   pp.innerHTML =
@@ -9969,15 +10284,22 @@ function _hmiRenderLineProp(pp, ln){
     `<div class="pp-body">` +
       `<div class="pp-row"><label>Color</label><input type="color" id="pp-ln-color" value="${_hmiToHex(ln.color||HMI_DEFAULT_LINE_COLOR)}"><span class="pp-grow"></span></div>` +
       `<div class="pp-row"><label>Width</label><input type="number" min="1" max="40" id="pp-ln-w" value="${ln.width||2}"></div>` +
-      `<div class="pp-row"><label>Variable</label><input type="text" id="pp-ln-tag" placeholder="tag / address" value="${ln.tag?_hmiEsc(ln.tag):''}"></div>` +
+      `<div class="pp-row"><label>Variable</label><input type="text" id="pp-ln-tag" placeholder="tag / address" value="${ln.tag?_hmiEsc(ln.tag):''}">` +
+        `<label class="pp-chk${ln.tag?'':' off'}" title="${ln.tag?'Invert: the line lights up when the variable is OFF':'assign a variable first'}">` +
+          `<input type="checkbox" id="pp-ln-inv" ${ln.invert?'checked':''} ${ln.tag?'':'disabled'}>⇄ INV</label></div>` +
+      `<div class="pp-row"><label>Flow</label>` +
+        `<label class="pp-chk${ln.tag?'':' off'}" title="${ln.tag?'Marching dashes while the variable is ON — they travel from the first drawn point to the last':'assign a variable first'}">` +
+          `<input type="checkbox" id="pp-ln-anim" ${ln.anim?'checked':''} ${ln.tag?'':'disabled'}>⇢ ANIM</label><span class="pp-grow"></span></div>` +
       _hmiLineStateRow(ln) +
-      `<div class="pp-note">with a variable the line turns <span style="color:var(--green)">green</span>/<span style="color:var(--red)">red</span> by its state · or drag a tag from the ladder menu onto the line</div>` +
+      `<div class="pp-note">with a variable the line turns <span style="color:var(--green)">green</span>/<span style="color:var(--red)">red</span> by its state · <b>INV</b> swaps ON/OFF · <b>ANIM</b> runs dashes along an ON line (saved with the project) · or drag a tag from the ladder menu onto the line</div>` +
       `<button class="pp-del" data-act="del">✕ DELETE LINE</button>` +
     `</div>`;
   pp.querySelector('[data-act="close"]').onclick = ()=> hmiDeselect();
   pp.querySelector('[data-act="del"]').onclick   = ()=> _hmiDeleteLine(ln);
   pp.querySelector('#pp-ln-color').oninput = e=>{ ln.color = e.target.value; scheduleHMIRedraw(); };
   pp.querySelector('#pp-ln-w').oninput     = e=>{ ln.width = Math.max(1, Math.min(40, parseInt(e.target.value)||2)); scheduleHMIRedraw(); };
+  pp.querySelector('#pp-ln-inv').onchange  = e=>{ ln.invert = e.target.checked; _hmiRenderProp(); scheduleHMIRedraw(); };
+  pp.querySelector('#pp-ln-anim').onchange = e=>{ ln.anim   = e.target.checked; scheduleHMIRedraw(); };
   const tagIn = pp.querySelector('#pp-ln-tag');
   const apply = ()=>{ _hmiAssignLineTag(ln, tagIn.value); _hmiRenderProp(); };
   tagIn.addEventListener('change', apply);
@@ -9989,6 +10311,15 @@ function _hmiRenderLineProp(pp, ln){
   const b = document.getElementById('hmi-tool-'+t);
   if(b) b.addEventListener('click', ()=> hmiSetTool(t));
 });
+(function(){
+  const cb = document.getElementById('hmi-chk-showlines');
+  if(!cb) return;
+  cb.addEventListener('change', ()=>{
+    hmiShowAllLines = cb.checked;
+    cb.parentElement.classList.toggle('on', cb.checked);
+    scheduleHMIRedraw();
+  });
+})();
 (function(){
   const ta = document.getElementById('hmi-text-editor');
   ta.addEventListener('input', ()=>{ if(_hmiEditingText) _hmiEditingText.text = ta.value; _hmiAutoSizeEditor(); });
@@ -10238,10 +10569,13 @@ function _hmiLayoutObj(includeImage){
       id: t.id, x: Math.round(t.x*10)/10, y: Math.round(t.y*10)/10,
       w: (typeof t.w === 'number' ? Math.round(t.w*10)/10 : null),
       h: (typeof t.h === 'number' ? Math.round(t.h*10)/10 : null),
-      text: t.text, fontSize: t.fontSize, color: t.color, bg: t.bg || null
+      text: t.text, fontSize: t.fontSize, color: t.color, bg: t.bg || null,
+      fmt: (t.fmt && t.fmt !== 'auto') ? t.fmt : undefined  // default source format is omitted
     })),
     lines: hmiState.lines.map(l=>({
       id: l.id, color: l.color, width: l.width, tag: l.tag || null, prog: l.prog || null,
+      invert: l.invert ? true : undefined,
+      anim: l.anim ? true : undefined,
       pts: l.pts.map(p=>({x: Math.round(p.x*10)/10, y: Math.round(p.y*10)/10}))
     }))
   };
@@ -10412,7 +10746,8 @@ function _hmiApplyLayout(obj){
       h: (typeof t.h === 'number' && t.h > 0) ? t.h : 0,
       text: typeof t.text === 'string' ? t.text : '',
       fontSize: (typeof t.fontSize === 'number' && t.fontSize >= 4 && t.fontSize <= 200) ? t.fontSize : 14,
-      color: t.color || '#d4e8f0', bg: t.bg || null
+      color: t.color || '#d4e8f0', bg: t.bg || null,
+      fmt: HMI_FMTS.includes(String(t.fmt || '').toLowerCase()) ? String(t.fmt).toLowerCase() : 'auto'
     }));
   hmiState.lines = (Array.isArray(obj.lines) ? obj.lines : [])
     .filter(l => l && Array.isArray(l.pts) && l.pts.length >= 2)
@@ -10421,7 +10756,7 @@ function _hmiApplyLayout(obj){
       pts: l.pts.filter(p => p && typeof p.x === 'number' && typeof p.y === 'number').map(p => ({x:p.x, y:p.y})),
       color: l.color || HMI_DEFAULT_LINE_COLOR,
       width: (typeof l.width === 'number' && l.width >= 1 && l.width <= 40) ? l.width : 2,
-      tag: l.tag || null, prog: l.prog || null
+      tag: l.tag || null, prog: l.prog || null, invert: !!l.invert, anim: !!l.anim
     }))
     .filter(l => l.pts.length >= 2);
   // Loading always lands in run mode (Edit OFF), regardless of the mode the
