@@ -523,6 +523,64 @@ _LOCAL_IO_FIELD_TYPES = {
     'FAULT':    (4, 'dint'),   # DINT — module fault word
 }
 
+# ── Accessor ↔ element size, used to re-fit a guessed reader to reality ──────
+# Every Logix reader below is a *guess*: it comes from the L5X dataType hint,
+# a name heuristic, or the blanket DINT default. When the guess is wider than
+# the data the controller actually sent, libplctag's getter reads past the end
+# of the tag buffer and returns the type's sentinel — plc_tag_get_int32 gives
+# INT32_MIN (-2147483648), plc_tag_get_int16 gives -32768 — which the tracer
+# then paints as a permanently TRUE contact. _logix_fit_reader() sizes the
+# accessor off the buffer libplctag really filled, so the value is right even
+# when no type hint ever arrives (the common case: an L5X Alias tag carries no
+# DataType attribute, so `SAF1_BG03_St2 → Local:2:I.Pt07.Status` was read as a
+# 4-byte DINT although the controller returns a 1-byte BOOL).
+_LGX_READER_WIDTH = {
+    'bool': 1, 'sint': 1, 'usint': 1,
+    'int':  2, 'uint':  2,
+    'dint': 4, 'udint': 4, 'real': 4,
+    'lint': 8, 'lreal': 8,
+}
+# Element size (bytes) → accessor to fall back on.
+_LGX_READER_BY_SIZE = {1: 'bool', 2: 'int', 4: 'dint', 8: 'lint'}
+# Readers that came from an explicit 1-byte numeric hint — a SINT holding 3 is
+# a number, not a bit, so these are never re-read as BOOL.
+_LGX_BYTE_NUMERIC = ('sint', 'usint')
+# One log line per (tag, correction) — the fit repeats on every poll cycle.
+_LGX_FIT_LOGGED: set = set()
+
+
+def _logix_actual_size(tag_handle: int) -> int:
+    """Bytes libplctag actually holds for this tag (0 if unavailable)."""
+    try:
+        return int(_libplctag.plc_tag_get_size(tag_handle))
+    except Exception:
+        return 0
+
+
+def _logix_fit_reader(reader: str, actual: int, meta: dict) -> str:
+    """Re-fit `reader` to the element size the controller really returned."""
+    if actual <= 0 or reader == 'string':
+        return reader
+    want = _LGX_READER_WIDTH.get(reader)
+    if want is None or want == actual:
+        return reader
+    if actual not in _LGX_READER_BY_SIZE:
+        return reader                      # struct / array payload — leave alone
+    if reader in ('real', 'lreal'):
+        return reader                      # a float of odd width is not an int
+    if actual == 1:
+        fitted = reader if reader in _LGX_BYTE_NUMERIC else 'bool'
+    else:
+        fitted = _LGX_READER_BY_SIZE[actual]
+    if fitted != reader:
+        key = f"{meta.get('logix_name') or '?'}|{reader}->{fitted}"
+        if key not in _LGX_FIT_LOGGED:
+            _LGX_FIT_LOGGED.add(key)
+            log.info(f"type fit: '{meta.get('logix_name') or '?'}' assumed "
+                     f"{reader.upper()} ({want}B) but controller returned "
+                     f"{actual}B → reading as {fitted.upper()}")
+    return fitted
+
 
 def _infer_logix_type(name: str, explicit: str | None = None) -> tuple[int, str, int | None]:
     """Pick (elem_size, reader, bit_idx) for a Logix tag.
@@ -568,6 +626,14 @@ def _infer_logix_type(name: str, explicit: str | None = None) -> tuple[int, str,
         # TIMER / COUNTER bare struct — treat as DINT (48-byte UDT read would need sub-field)
         if base in ('TIMER', 'COUNTER', 'CONTROL'):
             return 4, 'dint', None
+
+    # Local:N:I/O per-point member — Local:2:I.Pt07.Status, Local:1:O.Pt03.Data.
+    # Point-level members of a digital module are BOOL (1 byte on the wire) and
+    # are the usual AliasFor target of a ladder tag; the alias itself carries no
+    # DataType in the L5X, so without this the address falls through to the DINT
+    # default. Placed after the explicit hint so a real tagTypes hint still wins.
+    if _re.match(r'^Local:\d+:[IO]\.Pt\d+\.\w+$', name, _re.IGNORECASE):
+        return 1, 'bool', None
 
     # Local:N:I/O module fields — size by field, never blind DINT.
     # Covers whole-word reads issued by "Save Online Project":
@@ -651,7 +717,20 @@ def _logix_read_value(tag_handle: int, meta: dict):
         # this works whether the parent is INT (2 bytes, Module I/O) or DINT.
         # Reading uint32 on a 2-byte tag yields 0xFFFF____ garbage in the
         # upper half, making bits 8-31 always read as True.
-        return bool(_libplctag.plc_tag_get_bit(tag_handle, bit_idx))
+        rc = int(_libplctag.plc_tag_get_bit(tag_handle, bit_idx))
+        if rc < 0:
+            # Negative = libplctag error code (bit beyond the element, e.g. .17
+            # on a 2-byte INT word). bool(-6) is True — a silent always-on cell.
+            err = _libplctag.plc_tag_decode_error(rc)
+            raise ValueError(f"bit {bit_idx} out of range: "
+                             f"{err.decode() if err else rc}")
+        return bool(rc)
+
+    # Guess vs. reality: shrink/grow the accessor to the buffer libplctag has.
+    fitted = _logix_fit_reader(reader, _logix_actual_size(tag_handle), meta)
+    if fitted != reader:
+        reader = fitted
+        meta['reader'] = fitted     # handle is cached — correct it once, for good
 
     if reader == 'bool':
         return bool(_libplctag.plc_tag_get_uint8(tag_handle, 0) & 1)
@@ -787,6 +866,7 @@ class LibplctagConnection:
         self._handles: dict[str, int] = {}        # addr → tag handle
         self._handle_meta: dict[str, dict] = {}   # addr → meta from _build_tag_path
         self._type_hints: dict[str, str] = {}     # addr → L5X dataType (from tracer)
+        self._err_seen: dict[str, str] = {}       # addr → last logged read error
         # ── DEBUG_SAVE counters: prove handle cache reuse (no duplicate reads) ──
         self._dbg_handle_hits = 0      # _get_or_create served from cache
         self._dbg_handle_creates = 0   # _get_or_create created a new libplctag handle
@@ -1090,6 +1170,24 @@ class LibplctagConnection:
                 results[name] = dict(e) if e else {
                     "value": None, "type": "?", "error": "read failed", "ts": time.time()}
 
+        # ── Name the failures ───────────────────────────────────────────────
+        # A bad address used to be invisible in the log ("ok=12 err=4") while the
+        # tracer just showed an empty cell. Log each failing tag once; stay quiet
+        # until its error text changes or it starts reading again.
+        if phys_err:
+            fresh = []
+            for n, e in phys_err.items():
+                msg = str(e.get('error'))
+                if self._err_seen.get(n) != msg:
+                    fresh.append(f"{n.replace(_LGX_STRUCT_SENTINEL, '(struct)')} → {msg}")
+                self._err_seen[n] = msg
+            if fresh:
+                more = f" (+{len(fresh) - 8} more)" if len(fresh) > 8 else ""
+                log.warning(f"read failed for {len(fresh)} tag(s): "
+                            f"{'; '.join(fresh[:8])}{more}")
+        for n in phys_ok:
+            self._err_seen.pop(n, None)
+
         if DEBUG_SAVE:
             # Post-read summary: timing + handle-cache reuse for this batch.
             # hits  = handles served from cache (reused, no new CIP/PCCC tag)
@@ -1216,7 +1314,16 @@ class LibplctagConnection:
         """
         try:
             if is_logix:
-                v = bool(_libplctag.plc_tag_get_bit(handle, bit))
+                rc = int(_libplctag.plc_tag_get_bit(handle, bit))
+                if rc < 0:
+                    # Bit past the end of the parent element — report it instead
+                    # of letting bool(<negative error code>) read as True.
+                    err = _libplctag.plc_tag_decode_error(rc)
+                    return {"value": None, "type": "?",
+                            "error": f"bit {bit} out of range: "
+                                     f"{err.decode() if err else rc}",
+                            "ts": time.time()}
+                v = bool(rc)
             else:
                 word = _libplctag.plc_tag_get_uint16(handle, 0)
                 v = bool((word >> bit) & 1)

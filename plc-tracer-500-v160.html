@@ -6604,8 +6604,12 @@ function buildTypeMap(tags){
   if(!P || !P.syms || !P.isL5X) return map;
   for(const t of tags){
     if(!t || typeof t !== 'string') continue;
-    // Skip SLC file notation (N7:0, B3:0/5, I:1.10/0, S2:0, …) — not Logix
-    if(!t.startsWith('Program:') && /^[A-Z]+\d*:\d/i.test(t)) continue;
+    // Skip SLC file notation (N7:0, B3:0/5, I:1.10/0, S2:0, …) — not Logix.
+    // A Logix module tag ("Local:2:I.Pt07.Status") has the same <word>:<digit>
+    // shape but IS a Logix address — it must keep its hint, otherwise the
+    // bridge sizes it by guesswork.
+    const isModuleTag = /^[A-Za-z]\w*:\d+:[IOC]\b/.test(t);
+    if(!t.startsWith('Program:') && !isModuleTag && /^[A-Z]+\d*:\d/i.test(t)) continue;
     // Strip "Program:Prog." prefix to find base key in syms
     let q = t;
     if(q.startsWith('Program:')){
@@ -6614,12 +6618,23 @@ function buildTypeMap(tags){
     }
     // First try full path (covers UDT members, array elements), then base tag
     const baseTag = q.split('.')[0].replace(/\[.*?\]/g, '');
-    const info = P.syms[q] || P.syms[baseTag];
-    if(info && info.dataType){
-      map[t] = info.dataType;
-    }
+    const dt = symDataType(q) || symDataType(baseTag);
+    if(dt) map[t] = dt;
   }
   return map;
+}
+
+// dataType of a tag, following Alias hops. Studio 5000 omits the DataType
+// attribute on Alias tags — the type lives on the target — so an aliased I/O
+// point (SAF1_BG03_St2 → Local:2:I.Pt07.Status) yielded no hint at all and the
+// bridge fell back to its DINT default, reading a 1-byte BOOL as a 4-byte int.
+function symDataType(key, depth){
+  const info = key ? P.syms[key] : null;
+  if(!info) return '';
+  if(info.dataType) return info.dataType;
+  const d = depth || 0;
+  if(info.aliasFor && d < 8) return symDataType(info.aliasFor, d + 1);
+  return '';
 }
 
 // Build the full watch_only payload including L5X type hints when available.
