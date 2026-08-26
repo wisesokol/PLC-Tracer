@@ -1,16 +1,16 @@
 """
 PLC Bridge — GUI Control Panel
 ================================
-Запуск:  python plc_bridge_ui.py
+Run:  python plc_bridge_ui.py
 
-Запускает мост прямо из окна:
-  • Настройка IP / slot / тип / интервал
-  • Список сохранённого оборудования (имя + IP) для быстрого переключения
-  • Кнопки Запустить / Остановить / Переподключить
-  • Статус соединения и кол-во опрашиваемых тегов
-  • Лог с фильтрацией по уровню
+Runs the bridge straight from the window:
+  • IP / slot / type / interval setup
+  • Saved device list (name + IP) for quick switching
+  • Start / Stop / Reconnect buttons
+  • Connection status and polled tag count
+  • Log with level filtering
 
-WebSocket (порт 8765) поднимается автоматически — tracer подключается как обычно.
+The WebSocket (port 8765) starts automatically — the tracer connects as usual.
 """
 
 import sys, threading, asyncio, time, logging, json, os
@@ -31,7 +31,7 @@ except ImportError as e:
     import tkinter as tk
     from tkinter import messagebox
     tk.Tk().withdraw()
-    messagebox.showerror("Ошибка", f"plc_bridge_500.py не найден рядом:\n{e}")
+    messagebox.showerror("Error", f"plc_bridge_500.py not found next to this file:\n{e}")
     sys.exit(1)
 
 try:
@@ -72,7 +72,7 @@ DEV_FILE = Path(__file__).parent / "plc_bridge_devices.json"
 
 
 class DeviceStore:
-    """Named connection presets ("оборудование"), persisted next to the script.
+    """Named connection presets ("devices"), persisted next to the script.
 
     File: {"version":1, "last":<name>, "devices":[{name, ip, slot, type,
     interval, rslinx}, ...]}.  A missing or broken file degrades to an empty
@@ -94,7 +94,7 @@ class DeviceStore:
             return
         except Exception as e:
             logging.getLogger("bridge500").warning(
-                f"Список оборудования не прочитан ({self.path.name}): {e}")
+                f"Device list not loaded ({self.path.name}): {e}")
             return
         self.last = str(raw.get("last", "") or "")
         for d in raw.get("devices", []):
@@ -119,7 +119,7 @@ class DeviceStore:
             return True
         except Exception as e:
             logging.getLogger("bridge500").error(
-                f"Список оборудования не сохранён ({self.path}): {e}")
+                f"Device list not saved ({self.path}): {e}")
             try:
                 tmp.unlink()
             except OSError:
@@ -244,7 +244,7 @@ class BridgeController:
     async def _start(self):
         self.conn   = create_connection(self.cfg)
         self.poller = TagPoller(self.conn, self.cfg)
-        self.q.put(("status", "ПОДКЛЮЧЕНИЕ…", WARN))
+        self.q.put(("status", "CONNECTING…", WARN))
         ok = await self.conn.connect()
         self.q.put(("connected", ok, self.conn.controller_info, self.conn.error))
 
@@ -257,7 +257,7 @@ class BridgeController:
                 "0.0.0.0", self.cfg.port_ws,
             )
             logging.getLogger("bridge500").info(
-                f"WebSocket запущен → ws://localhost:{self.cfg.port_ws}")
+                f"WebSocket started → ws://localhost:{self.cfg.port_ws}")
 
     async def _stop(self):
         if self.poller:  self.poller.stop()
@@ -268,7 +268,7 @@ class BridgeController:
             await self._ws_srv.wait_closed()
             self._ws_srv = None
         if self.conn: await self.conn.disconnect()
-        self.q.put(("connected", False, {}, "Остановлен"))
+        self.q.put(("connected", False, {}, "Stopped"))
 
     async def _reconnect(self):
         if not self.conn: return
@@ -341,7 +341,7 @@ class App(tk.Tk):
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="PLC Bridge", bg=HDR, fg="#b8d8f0",
                  font=("Courier New", 13, "bold")).pack(side=tk.LEFT)
-        self._lbl_st = tk.Label(hdr, text="● ОСТАНОВЛЕН", bg=HDR,
+        self._lbl_st = tk.Label(hdr, text="● STOPPED", bg=HDR,
                                 fg=TEXT2, font=MONO)
         self._lbl_st.pack(side=tk.LEFT, padx=14)
         self._lbl_ctrl = tk.Label(hdr, text="", bg=HDR, fg=TEXT2, font=MONO9)
@@ -361,15 +361,15 @@ class App(tk.Tk):
         r0 = tk.Frame(p, bg=CARD)
         r0.pack(fill=tk.X, pady=(0, 8))
 
-        _lbl(r0, "Оборудование").pack(side=tk.LEFT)
+        _lbl(r0, "Device").pack(side=tk.LEFT)
         self._v_dev  = tk.StringVar(value="")
         self._cb_dev = ttk.Combobox(r0, textvariable=self._v_dev, state="readonly",
                                     values=[], width=36, font=MONO9)
         self._cb_dev.pack(side=tk.LEFT, padx=(4, 8))
         self._cb_dev.bind("<<ComboboxSelected>>", self._on_dev_select)
 
-        _btn_sm(r0, "💾 Сохранить", self._on_dev_save).pack(side=tk.LEFT, padx=(0, 4))
-        _btn_sm(r0, "✕ Удалить",   self._on_dev_delete).pack(side=tk.LEFT)
+        _btn_sm(r0, "💾 Save",   self._on_dev_save).pack(side=tk.LEFT, padx=(0, 4))
+        _btn_sm(r0, "✕ Delete", self._on_dev_delete).pack(side=tk.LEFT)
 
         self._lbl_hint = tk.Label(r0, text="", bg=CARD, fg=TEXT2, font=MONO9)
         self._lbl_hint.pack(side=tk.LEFT, padx=10)
@@ -378,7 +378,7 @@ class App(tk.Tk):
         r1 = tk.Frame(p, bg=CARD)
         r1.pack(fill=tk.X, pady=(0, 8))
 
-        _lbl(r1, "Тип").pack(side=tk.LEFT)
+        _lbl(r1, "Type").pack(side=tk.LEFT)
         self._v_type = tk.StringVar(value="slc")
         ttk.Combobox(r1, textvariable=self._v_type, state="readonly",
                      values=["slc", "logix"], width=7,
@@ -396,17 +396,17 @@ class App(tk.Tk):
         r2 = tk.Frame(p, bg=CARD)
         r2.pack(fill=tk.X, pady=(0, 12))
 
-        _lbl(r2, "Интервал, с").pack(side=tk.LEFT)
+        _lbl(r2, "Interval, s").pack(side=tk.LEFT)
         self._v_iv = tk.StringVar(value="0.2")
         _entry(r2, self._v_iv, width=6).pack(side=tk.LEFT, padx=(4, 20))
 
         # Parallel CIP connections. One connection = one request in flight, so a
         # long watch list is read strictly round-trip after round-trip; spreading
         # it over several connections overlaps them and shortens the cycle.
-        _lbl(r2, "Соединений").pack(side=tk.LEFT)
+        _lbl(r2, "Connections").pack(side=tk.LEFT)
         self._v_groups = tk.StringVar(value="0")
         _entry(r2, self._v_groups, width=4).pack(side=tk.LEFT, padx=(4, 4))
-        tk.Label(r2, text="0 = авто", bg=CARD, fg=TEXT2,
+        tk.Label(r2, text="0 = auto", bg=CARD, fg=TEXT2,
                  font=MONO9).pack(side=tk.LEFT, padx=(0, 20))
 
         self._v_rslinx = tk.BooleanVar(value=False)
@@ -418,7 +418,7 @@ class App(tk.Tk):
         # Row 2b — records directory
         r2b = tk.Frame(p, bg=CARD)
         r2b.pack(fill=tk.X, pady=(0, 12))
-        _lbl(r2b, "Папка записей").pack(side=tk.LEFT)
+        _lbl(r2b, "Records folder").pack(side=tk.LEFT)
         self._v_recdir = tk.StringVar(value=self.bridge.cfg.records_dir)
         _entry(r2b, self._v_recdir, width=36).pack(side=tk.LEFT, padx=(4, 0))
 
@@ -426,22 +426,22 @@ class App(tk.Tk):
         r3 = tk.Frame(p, bg=CARD)
         r3.pack(fill=tk.X)
 
-        self._btn_start = _btn(r3, "▶  Запустить", self._on_start,
+        self._btn_start = _btn(r3, "▶  Start", self._on_start,
                                bg=ACC, fg="#040e08",
                                abg="#2ab060", afg="#040e08")
         self._btn_start.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._btn_stop = _btn(r3, "■  Остановить", self._on_stop, state=tk.DISABLED)
+        self._btn_stop = _btn(r3, "■  Stop", self._on_stop, state=tk.DISABLED)
         self._btn_stop.pack(side=tk.LEFT, padx=(0, 8))
 
-        self._btn_rc = _btn(r3, "↺  Переподключить", self._on_reconnect,
+        self._btn_rc = _btn(r3, "↺  Reconnect", self._on_reconnect,
                             state=tk.DISABLED)
         self._btn_rc.pack(side=tk.LEFT)
 
         # ─ Watching strip ─
         strip = tk.Frame(self, bg=BG, padx=14, pady=5)
         strip.pack(fill=tk.X)
-        _lbl(strip, "Тегов в опросе:").pack(side=tk.LEFT)
+        _lbl(strip, "Tags polled:").pack(side=tk.LEFT)
         self._lbl_tags = tk.Label(strip, text="—", bg=BG, fg=TEXT, font=MONO9)
         self._lbl_tags.pack(side=tk.LEFT, padx=6)
         # Cycle time — green while the read fits the interval, amber when it
@@ -452,13 +452,13 @@ class App(tk.Tk):
         # ─ Separator ─
         tk.Frame(self, bg=BORD, height=1).pack(fill=tk.X)
 
-        # ─ Notebook: Лог | Теги/Значения ─
+        # ─ Notebook: Log | Tags/Values ─
         nb = ttk.Notebook(self)
         nb.pack(fill=tk.BOTH, expand=True)
 
         # ── Tab 1: Log ──────────────────────────────────────────────────────
         tab_log = tk.Frame(nb, bg=HDR)
-        nb.add(tab_log, text="  Лог  ")
+        nb.add(tab_log, text="  Log  ")
 
         # log toolbar
         lt = tk.Frame(tab_log, bg=HDR, padx=12, pady=6)
@@ -470,19 +470,19 @@ class App(tk.Tk):
                      font=MONO9).pack(side=tk.LEFT)
         self._log_filter.trace_add("write", lambda *_: self._redraw_log())
 
-        tk.Checkbutton(lt, text="авто-скролл", variable=self._autoscroll,
+        tk.Checkbutton(lt, text="auto-scroll", variable=self._autoscroll,
                        bg=HDR, fg=TEXT, selectcolor=HDR,
                        activebackground=HDR, activeforeground=TEXT,
                        font=MONO9).pack(side=tk.LEFT, padx=8)
 
         # Debug switch for save-online round-trip (watch_only / read_now traces)
-        tk.Checkbutton(lt, text="Debug сохранения", variable=self._dbg_save,
+        tk.Checkbutton(lt, text="Save debug", variable=self._dbg_save,
                        command=lambda: set_debug_save(self._dbg_save.get()),
                        bg=HDR, fg=TEXT, selectcolor=HDR,
                        activebackground=HDR, activeforeground=TEXT,
                        font=MONO9).pack(side=tk.LEFT, padx=8)
 
-        tk.Button(lt, text="Очистить", command=self._clear_log,
+        tk.Button(lt, text="Clear", command=self._clear_log,
                   bg=HDR, fg=TEXT2, font=MONO9, bd=0, cursor="hand2",
                   activebackground=HDR, activeforeground=TEXT
                   ).pack(side=tk.RIGHT)
@@ -511,14 +511,14 @@ class App(tk.Tk):
 
         # ── Tab 2: Tags / Values ─────────────────────────────────────────────
         tab_vals = tk.Frame(nb, bg=HDR)
-        nb.add(tab_vals, text="  Теги / Значения  ")
+        nb.add(tab_vals, text="  Tags / Values  ")
 
         # toolbar
         vt = tk.Frame(tab_vals, bg=HDR, padx=12, pady=6)
         vt.pack(fill=tk.X)
-        self._lbl_vcnt = tk.Label(vt, text="Тегов: —", bg=HDR, fg=TEXT2, font=MONO9)
+        self._lbl_vcnt = tk.Label(vt, text="Tags: —", bg=HDR, fg=TEXT2, font=MONO9)
         self._lbl_vcnt.pack(side=tk.LEFT)
-        tk.Button(vt, text="Очистить", command=self._clear_values,
+        tk.Button(vt, text="Clear", command=self._clear_values,
                   bg=HDR, fg=TEXT2, font=MONO9, bd=0, cursor="hand2",
                   activebackground=HDR, activeforeground=TEXT
                   ).pack(side=tk.RIGHT)
@@ -538,10 +538,10 @@ class App(tk.Tk):
                                 yscrollcommand=tv_sb.set, selectmode="browse")
         tv_sb.config(command=self._tv.yview)
 
-        self._tv.heading("tag",     text="Адрес",    anchor=tk.W)
-        self._tv.heading("value",   text="Значение", anchor=tk.W)
-        self._tv.heading("type",    text="Тип",      anchor=tk.W)
-        self._tv.heading("updated", text="Обновлено",anchor=tk.W)
+        self._tv.heading("tag",     text="Address", anchor=tk.W)
+        self._tv.heading("value",   text="Value",   anchor=tk.W)
+        self._tv.heading("type",    text="Type",    anchor=tk.W)
+        self._tv.heading("updated", text="Updated", anchor=tk.W)
 
         self._tv.column("tag",     width=160, minwidth=80,  stretch=False)
         self._tv.column("value",   width=140, minwidth=60,  stretch=True)
@@ -653,7 +653,7 @@ class App(tk.Tk):
     def _apply_dev(self, d: dict):
         """Fill the connection fields from a preset. Deliberately does NOT
         reconnect: dropping a live connection because a list item was clicked
-        would be a nasty surprise. The user presses Запустить/Переподключить."""
+        would be a nasty surprise. The user presses Start/Reconnect."""
         self._v_type.set(d["type"])
         self._v_ip.set(d["ip"])
         self._v_slot.set(str(d["slot"]))
@@ -674,13 +674,13 @@ class App(tk.Tk):
         self._apply_dev(d)
         self._devs.last = d["name"]
         self._devs.save()
-        self._hint("↻ нажмите Переподключить" if self._started else "поля заполнены")
+        self._hint("↻ press Reconnect" if self._started else "fields filled in")
 
     def _on_dev_save(self):
         ip = self._v_ip.get().strip()
         if not ip:
-            messagebox.showwarning("Нет адреса",
-                                   "Сначала введите IP адрес.", parent=self)
+            messagebox.showwarning("No address",
+                                   "Enter an IP address first.", parent=self)
             return
         try:
             dev = {"name": "",
@@ -691,49 +691,49 @@ class App(tk.Tk):
                    "groups": int(self._v_groups.get() or 0),
                    "rslinx": self._v_rslinx.get()}
         except ValueError:
-            messagebox.showwarning("Неверные данные",
-                                   "Slot и интервал должны быть числами.", parent=self)
+            messagebox.showwarning("Invalid input",
+                                   "Slot and interval must be numbers.", parent=self)
             return
 
         cur  = self._selected_dev()
-        name = _ask_name(self, "Сохранить оборудование", "Имя оборудования:",
+        name = _ask_name(self, "Save device", "Device name:",
                          initial=(cur["name"] if cur else ""))
         if name is None:
             return
         name = name.strip()
         if not name:
-            messagebox.showwarning("Пустое имя",
-                                   "Имя не может быть пустым.", parent=self)
+            messagebox.showwarning("Empty name",
+                                   "The name cannot be empty.", parent=self)
             return
         if self._devs.find(name) and not messagebox.askyesno(
-                "Перезаписать?",
-                f"«{name}» уже есть в списке. Перезаписать?", parent=self):
+                "Overwrite?",
+                f"“{name}” is already in the list. Overwrite?", parent=self):
             return
 
         dev["name"] = name
         if self._devs.put(dev):
             self._refresh_dev_combo(select=name)
-            self._hint(f"«{name}» сохранено")
+            self._hint(f"“{name}” saved")
         else:
-            messagebox.showerror("Ошибка",
-                                 f"Не удалось записать список:\n{self._devs.path}",
+            messagebox.showerror("Error",
+                                 f"Could not write the list:\n{self._devs.path}",
                                  parent=self)
 
     def _on_dev_delete(self):
         d = self._selected_dev()
         if not d:
-            self._hint("выберите оборудование в списке")
+            self._hint("select a device in the list")
             return
-        if not messagebox.askyesno("Удалить?",
-                                   f"Удалить «{d['name']}» из списка?", parent=self):
+        if not messagebox.askyesno("Delete?",
+                                   f"Remove “{d['name']}” from the list?", parent=self):
             return
         if self._devs.remove(d["name"]):
             self._v_dev.set("")
             self._refresh_dev_combo()
-            self._hint(f"«{d['name']}» удалено")
+            self._hint(f"“{d['name']}” deleted")
         else:
-            messagebox.showerror("Ошибка",
-                                 f"Не удалось записать список:\n{self._devs.path}",
+            messagebox.showerror("Error",
+                                 f"Could not write the list:\n{self._devs.path}",
                                  parent=self)
 
     # ── Queue consumer ────────────────────────────────────────────────────────
@@ -790,26 +790,26 @@ class App(tk.Tk):
         if cycle <= 0:
             self._lbl_cycle.config(text="", fg=TEXT2)
             return
-        text = f"Цикл: {cycle:.0f} мс · интервал {interval:.2f} с"
+        text = f"Cycle: {cycle:.0f} ms · interval {interval:.2f} s"
         reads = st.get("reads")
         if reads:
             # Requests, not tags: bits fold into their word, timer members into
             # one structure read, and SLC runs into one block read.
-            text += f" · запросов: {reads}"
+            text += f" · requests: {reads}"
             # Payload beside it, because which of the two costs more depends on
             # the link: a request costs scan time on a direct connection, bytes
             # cost wire time behind a serial gateway. Both visible = tunable.
             nbytes = st.get("bytes") or 0
             if nbytes:
-                text += (f" · {nbytes / 1024:.1f} КБ" if nbytes >= 1024
-                         else f" · {nbytes} Б")
+                text += (f" · {nbytes / 1024:.1f} KB" if nbytes >= 1024
+                         else f" · {nbytes} B")
         groups = st.get("groups")
         if groups:
             # Shown because it is the knob that moves the cycle time: one
             # connection reads the watch list strictly round-trip by round-trip.
-            text += f" · соед.: {groups}"
+            text += f" · conn.: {groups}"
         if timeouts:
-            text += f" · таймаутов: {timeouts}"
+            text += f" · timeouts: {timeouts}"
             col = ERR
         elif cycle > CYCLE_WARN_MS:
             # Not "longer than the interval": a controller behind a serial
@@ -884,11 +884,11 @@ class App(tk.Tk):
                                 values=(tag, val_s, typ, ts_s), tags=row_tag)
 
         n = len(self._tv.get_children())
-        self._lbl_vcnt.config(text=f"Тегов: {n}" if n else "Тегов: —")
+        self._lbl_vcnt.config(text=f"Tags: {n}" if n else "Tags: —")
 
     def _clear_values(self):
         self._tv.delete(*self._tv.get_children())
-        self._lbl_vcnt.config(text="Тегов: —")
+        self._lbl_vcnt.config(text="Tags: —")
 
     def _clear_log(self):
         self._all_log.clear()
@@ -950,7 +950,7 @@ def _ask_name(parent, title, prompt, initial=""):
     row.pack(fill=tk.X)
     _btn_sm(row, "  OK  ", ok, bg=ACC, fg="#040e08",
             abg="#2ab060", afg="#040e08").pack(side=tk.RIGHT, padx=(6, 0))
-    _btn_sm(row, "Отмена", win.destroy).pack(side=tk.RIGHT)
+    _btn_sm(row, "Cancel", win.destroy).pack(side=tk.RIGHT)
 
     ent.bind("<Return>", ok)
     win.bind("<Escape>", lambda _e: win.destroy())
@@ -974,9 +974,9 @@ if __name__ == "__main__":
     if not LIBPLCTAG_OK:
         import tkinter.messagebox as mb
         tk.Tk().withdraw()
-        mb.showerror("Нет libplctag",
-                     "Положите plctag.dll в папку Bridge/libplctag_2.6.16_windows_x64/\n\n"
-                     "Установка зависимостей:\n  pip install websockets aiohttp aiohttp-cors")
+        mb.showerror("libplctag missing",
+                     "Put plctag.dll into Bridge/libplctag_2.6.16_windows_x64/\n\n"
+                     "Install dependencies:\n  pip install websockets aiohttp aiohttp-cors")
         sys.exit(1)
 
     app = App()
