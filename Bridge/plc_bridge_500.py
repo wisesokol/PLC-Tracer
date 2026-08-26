@@ -18,7 +18,7 @@ Requirements:
     plctag.dll in Bridge/libplctag_2.6.16_windows_x64/
 """
 
-import asyncio, collections, json, logging, argparse, os, sys, time
+import asyncio, collections, json, logging, argparse, os, sys, time, zlib
 from pathlib import Path
 
 # ── libplctag (SLC 5/05, MicroLogix via PCCC + ControlLogix/CompactLogix via CIP) ─────────────────────
@@ -108,16 +108,25 @@ try:
     PLCTAG_STATUS_OK = 0
     PLCTAG_STATUS_PENDING = 1
     PLCTAG_ERR_TIMEOUT = -32  # common libplctag timeout code
+    PLCTAG_ERR_BUSY = -39     # a read from an earlier cycle is still in flight
 except Exception as _e:
     _libplctag = None
     LIBPLCTAG_OK = False
     PLCTAG_STATUS_OK = 0
     PLCTAG_STATUS_PENDING = 1
     PLCTAG_ERR_TIMEOUT = -32
+    PLCTAG_ERR_BUSY = -39
     _LIBPLCTAG_HAS_STRING = False
     _LIBPLCTAG_HAS_RAW = False
     _LIBPLCTAG_HAS_SET_ATTR = False
     print(f"[WARN] libplctag not loaded: {_e}")
+
+# Transient read conditions: the handle is still perfectly good, only this
+# cycle's read did not finish in time. Destroying the handle here used to start
+# a rebuild storm — every timed-out tag was re-created on the next cycle, which
+# made that cycle slower still, so the timeouts fed themselves until the user
+# shrank the scene. Keep the handle: the in-flight read lands a few ms later.
+_SOFT_READ_ERRS = frozenset({PLCTAG_ERR_TIMEOUT, PLCTAG_ERR_BUSY})
 
 try:
     import aiohttp
@@ -196,6 +205,21 @@ class Config:
         self.processor_type= "SLC"     # "SLC" | "MicroLogix" | "Logix5000"
         self.controller_type = "slc"   # "slc" | "logix"  — drives test-read logic
         self.poll_interval = POLL_IV
+        # How many parallel CIP connections the watch list is spread over.
+        # libplctag serialises every request that shares a session: one socket,
+        # one request in flight, so a 500-tag watch list is ~50 round-trips
+        # end to end. Tags carrying different connection_group_id land on
+        # separate sessions (own socket + own I/O thread) and their round-trips
+        # overlap. 0 = auto (see _effective_groups).
+        self.conn_groups   = 0
+        # SLC/PCCC: read contiguous runs of a data file in one request instead
+        # of one request per address. Off only for diagnosing a controller that
+        # mishandles multi-element reads.
+        self.slc_blocks    = True
+        # Wasted bytes worth carrying inside an SLC block to save one request.
+        # Low for a serial-gateway link (bytes are the cost), high for a direct
+        # Ethernet connection (requests are the cost). See _SLC_GAP_BYTES.
+        self.slc_gap_bytes = _SLC_GAP_BYTES
         self.watched_tags  = []
         self.slc_path      = ""        # loaded .SLC / .APS file for tag list
         self.port_ws       = DEFAULT_WS
@@ -219,10 +243,12 @@ _rec: dict = {
     'active':    False,
     'tmp_path':  None,   # Path to _tmp file (header + all chunks so far)
     'main_path': None,   # Path to final .ndrec file (mirror of tmp, rebuilt each chunk)
-    'header':    {},     # current header dict (tagIndex updated on each chunk)
+    'header':    {},     # current header dict (tagIndex/graphSnap updated on each chunk)
+    'owner':     None,   # websocket that started it, so a dropped client closes it
 }
 
-def rec_start(stamp: str, graph_snap: dict, tag_index: list, records_dir: Path):
+def rec_start(stamp: str, graph_snap: dict, tag_index: list, records_dir: Path,
+              owner=None):
     rec_stop()  # stop any previous session
     records_dir.mkdir(parents=True, exist_ok=True)
     _rec['tmp_path']  = records_dir / f"plc_rec_{stamp}_tmp.ndrec"
@@ -237,13 +263,19 @@ def rec_start(stamp: str, graph_snap: dict, tag_index: list, records_dir: Path):
         json.dumps(_rec['header'], ensure_ascii=False) + "\n", encoding="utf-8"
     )
     _rec['active'] = True
+    _rec['owner']  = owner
     log.info(f"[REC] started → {_rec['main_path'].name}")
 
-def rec_chunk(tag_index: list, frames: list):
+def rec_chunk(tag_index: list, frames: list, graph_snap: dict | None = None):
     if not _rec['active']:
         return
     # 1. Update tagIndex in header
     _rec['header']['tagIndex'] = tag_index
+    # The tracer re-snapshots the scene when it captures its FIRST frame: REC is
+    # normally pressed before a tag is picked, so the snapshot taken at rec_start
+    # describes an empty canvas. Take the later one when it arrives.
+    if graph_snap:
+        _rec['header']['graphSnap'] = graph_snap
     # 2. Read existing tmp lines (header + previous chunks)
     existing = _rec['tmp_path'].read_text(encoding="utf-8").splitlines(keepends=True)
     # 3. Replace header line and append new chunk
@@ -270,6 +302,20 @@ def rec_stop():
     _rec['tmp_path']  = None
     _rec['main_path'] = None
     _rec['header']    = {}
+    _rec['owner']     = None
+
+
+def rec_stop_if_owner(websocket):
+    """Close the session whose client just disappeared.
+
+    A browser that closes mid-recording never sends rec_stop, which used to
+    leave the session 'active' with its _tmp scratch file on disk forever. The
+    .ndrec itself is already complete — every chunk rewrites it — so this only
+    has to release the session.
+    """
+    if _rec['active'] and _rec['owner'] is websocket:
+        log.info("[REC] client disconnected — closing the recording session")
+        rec_stop()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -674,8 +720,24 @@ def _logix_tag_path(cfg, name: str, elem_size: int, read_cache_ms: int) -> str:
     return "&".join(parts)
 
 
+def _with_conn_group(conn_str: str | None, group) -> str | None:
+    """Pin a tag to one of several parallel CIP connections.
+
+    libplctag keys its sessions on (gateway, path, connection_group_id), so two
+    tags with different ids get two sockets and two I/O threads, and their
+    request/response round-trips overlap instead of queueing behind each other.
+    `name=` stays last purely for readability of the logged string.
+    """
+    if not conn_str or group is None:
+        return conn_str
+    attr = f"connection_group_id={int(group)}"
+    if "&name=" in conn_str:
+        return conn_str.replace("&name=", f"&{attr}&name=", 1)
+    return f"{conn_str}&{attr}"
+
+
 def _build_tag_path(cfg, name: str, type_hint: str | None = None,
-                    read_cache_ms: int = 0) -> tuple[str | None, dict]:
+                    read_cache_ms: int = 0, group=None) -> tuple[str | None, dict]:
     """Universal path builder.
 
     Returns (connection_string, meta) where meta = {
@@ -693,7 +755,8 @@ def _build_tag_path(cfg, name: str, type_hint: str | None = None,
         if bit_idx is not None:
             # Strip trailing ".<bit>" for the actual read; we extract in value layer
             lgx_name = name.rsplit('.', 1)[0]
-        conn_str = _logix_tag_path(cfg, lgx_name, elem_size, read_cache_ms)
+        conn_str = _with_conn_group(
+            _logix_tag_path(cfg, lgx_name, elem_size, read_cache_ms), group)
         return conn_str, {
             'kind': 'lgx',
             'reader': reader,
@@ -703,7 +766,7 @@ def _build_tag_path(cfg, name: str, type_hint: str | None = None,
         }
 
     # SLC / MicroLogix — delegate to existing parser
-    conn_str = _slc_tag_path(cfg.ip, cfg.slot, name)
+    conn_str = _with_conn_group(_slc_tag_path(cfg.ip, cfg.slot, name), group)
     return conn_str, {'kind': 'slc'} if conn_str else {}
 
 
@@ -776,20 +839,145 @@ def _logix_read_value(tag_handle: int, meta: dict):
     return int(_libplctag.plc_tag_get_int32(tag_handle, 0))
 
 
-def _read_tag_value(tag_handle: int, name: str, meta: dict):
+def _read_tag_value(tag_handle: int, name: str, meta: dict, base_off: int = 0):
     """Dispatch to SLC or Logix value extractor based on meta.kind."""
     if meta.get('kind') == 'lgx':
         return _logix_read_value(tag_handle, meta)
-    return _slc_read_value(tag_handle, name)
+    return _slc_read_value(tag_handle, name, base_off)
 
 
-def _slc_read_value(tag_handle: int, name: str):
+# ── SLC block reads ──────────────────────────────────────────────────────────
+# PCCC has no equivalent of the CIP Multi-Service Packet: every tag handle is
+# its own request/response, and an SLC 5/05 answers them one at a time no matter
+# how many connections are open — which is why extra connections only add
+# timeouts there. What PCCC *does* offer is a multi-element read: one request
+# can fetch a whole run of a data file. Reading N7:0..N7:79 in a single request
+# instead of eighty replaces eighty round-trips with one.
+_SLC_BLOCK_SENTINEL = "\x00BLK"
+
+# Bytes per element, matching what _slc_tag_path builds for a single element —
+# block extraction must land on exactly the same layout.
+_SLC_ELEM_SIZE = {'T': 6, 'C': 6, 'F': 4}
+
+# Payload ceiling per PCCC read. An SLC 5/05 tops out around 236 bytes of data
+# per request; 224 keeps a margin for the reply header while filling the packet.
+# A controller that refuses this size does not lose block reads — the cap for
+# that file is halved on the spot (see _slc_block_cap).
+_SLC_BLOCK_BYTES = 224
+_SLC_BLOCK_BYTES_MIN = 16     # 8 words — below this a block barely beats singles
+
+# Bytes of unwanted data worth carrying inside a block to avoid one more
+# request. This is the whole trade, and its answer depends on the link:
+#   • plain Ethernet to the CPU — a request costs a slice of the program scan
+#     (~40 ms measured) while bytes are free, so a generous value wins;
+#   • serial port behind a COM-to-Ethernet converter — every byte is paid for on
+#     the wire (at 38400 baud a byte is ~0.26 ms), so filling holes to save a
+#     request quickly costs more than the request did.
+# The default is the frugal side: it never makes a cycle much worse, and it is
+# the setup that is measurably sensitive. Raise Config.slc_gap_bytes on a
+# directly connected controller.
+_SLC_GAP_BYTES = 16
+
+
+def _slc_block_elem_size(prefix: str) -> int:
+    return _SLC_ELEM_SIZE.get(prefix, 2)
+
+
+def _slc_block_key(prefix: str, file_num: int, start: int, count: int) -> str:
+    return f"{prefix}{file_num}:{start}{_SLC_BLOCK_SENTINEL}{count}"
+
+
+def _slc_parse_block_key(key: str):
+    """Block cache key → (name_of_first_element, elem_size, count) or None."""
+    if _SLC_BLOCK_SENTINEL not in key:
+        return None
+    head, _, cnt = key.partition(_SLC_BLOCK_SENTINEL)
+    parsed = _slc_parse_addr(head)
+    if not parsed:
+        return None
+    return head, _slc_block_elem_size(parsed[0]), int(cnt)
+
+
+def _plan_slc_blocks(names, skip_files=(), cap_for=None, gap_bytes=None):
+    """Group single-element SLC addresses into multi-element block reads.
+
+    Returns {phys_name: (block_key, byte_offset)} for every address that a block
+    covers; addresses left out (I/O files, unparseable names, files opted out
+    after a failure) simply keep their own handle.
+
+    Only whole-element addresses arrive here — bits were already folded into
+    their parent word upstream — so a block is a plain contiguous run.
+
+    A block grows until it would exceed the payload cap, and a hole inside it is
+    carried along only while the wasted bytes stay under `gap_bytes` — the point
+    where skipping a request stops paying for itself. See _SLC_GAP_BYTES for why
+    that budget, not the request count alone, is what has to be tuned.
+
+    `cap_for((prefix, file_num))` yields the byte cap for one file, letting a
+    controller that refused a large request keep smaller blocks.
+    """
+    by_file = {}
+    for name in names:
+        parsed = _slc_parse_addr(name)
+        if not parsed:
+            continue
+        prefix, file_num, element, bit, sub = parsed
+        # I/O files are addressed as <P><file>:<slot>.<word>: the element is the
+        # slot and the word rides in `sub`, so a run of elements is not a run of
+        # words. Left alone — an I/O watch list is a handful of words anyway.
+        if prefix in ('I', 'O'):
+            continue
+        if (prefix, file_num) in skip_files:
+            continue
+        by_file.setdefault((prefix, file_num), []).append((element, name))
+
+    plan = {}
+    for (prefix, file_num), items in by_file.items():
+        if len(items) < 2:
+            continue                      # one address is already one request
+        items.sort()
+        esz = _slc_block_elem_size(prefix)
+        cap = _SLC_BLOCK_BYTES if cap_for is None else cap_for((prefix, file_num))
+        max_elems = max(1, int(cap) // esz)
+        gap_b = _SLC_GAP_BYTES if gap_bytes is None else int(gap_bytes)
+        max_gap = max(0, gap_b // esz)     # unwanted elements worth carrying
+
+        def flush(run):
+            if len(run) < 2:
+                return
+            start = run[0][0]
+            count = run[-1][0] - start + 1
+            key = _slc_block_key(prefix, file_num, start, count)
+            for element, name in run:
+                plan[name] = (key, (element - start) * esz)
+
+        run = [items[0]]
+        for element, name in items[1:]:
+            # Split when the block would outgrow one request, or when the hole
+            # before this address costs more bytes than an extra request saves.
+            if (element - run[0][0] + 1 > max_elems
+                    or element - run[-1][0] - 1 > max_gap):
+                flush(run)
+                run = [(element, name)]
+            else:
+                run.append((element, name))
+        flush(run)
+    return plan
+
+
+def _slc_read_value(tag_handle: int, name: str, base_off: int = 0):
     """Extract typed value from a libplctag tag handle.
 
     Timer/Counter layout (elem_size=6, elem_count=1):
       bytes 0-1  word 0  control/status bits  (EN/TT/DN or CU/CD/DN/OV/UN)
       bytes 2-3  word 1  PRE (preset)
       bytes 4-5  word 2  ACC (accumulated)
+
+    `base_off` is the byte offset of this element inside the handle's buffer. It
+    is 0 for a one-element handle and the element's position when the value
+    comes out of a block read (a whole run of N7 / B3 / T4 fetched in a single
+    PCCC request) — every offset below is relative to the element, so shifting
+    the base is all that block support needs here.
 
     Returns int, float, bool, or dict {CTL, PRE, ACC} for bare T/C element.
     """
@@ -803,44 +991,44 @@ def _slc_read_value(tag_handle: int, name: str):
 
         if sub and sub in bits_map:
             # Named status bit: EN, TT, DN, CU, CD, OV, UN
-            ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, 0)
+            ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
             return bool((ctl_word >> bits_map[sub]) & 1)
 
         elif sub in _TC_BYTE_OFF:
             # PRE or ACC — read from correct byte offset
-            return _libplctag.plc_tag_get_int16(tag_handle, _TC_BYTE_OFF[sub])
+            return _libplctag.plc_tag_get_int16(tag_handle, base_off + _TC_BYTE_OFF[sub])
 
         elif sub is None and bit is not None:
             # Numeric bit within control word: T4:0/13 (same as DN)
-            ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, 0)
+            ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
             return bool((ctl_word >> bit) & 1)
 
         else:
             # Bare T/C element → return structured dict
-            ctl = _libplctag.plc_tag_get_uint16(tag_handle, 0)
-            pre = _libplctag.plc_tag_get_int16(tag_handle, 2)
-            acc = _libplctag.plc_tag_get_int16(tag_handle, 4)
+            ctl = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
+            pre = _libplctag.plc_tag_get_int16(tag_handle, base_off + 2)
+            acc = _libplctag.plc_tag_get_int16(tag_handle, base_off + 4)
             return {'CTL': ctl, 'PRE': pre, 'ACC': acc}
 
     elif prefix == 'F':
-        return round(_libplctag.plc_tag_get_float32(tag_handle, 0), 6)
+        return round(_libplctag.plc_tag_get_float32(tag_handle, base_off), 6)
 
     elif prefix in ('I', 'O') and (
             (isinstance(sub, str) and sub.startswith('W')) or bit is not None):
         # I/O word request: whole 16-bit word if no bit, else extracted bit.
         # Covers both I:slot.word (word-only) and I:slot/bit (bit fallback).
-        word_val = _libplctag.plc_tag_get_uint16(tag_handle, 0)
+        word_val = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
         if bit is None:
             return word_val
         return bool((word_val >> bit) & 1)
 
     elif bit is not None:
         # Bit-level access on a 16-bit word (e.g. B3:0/5, N7:0/3)
-        word = _libplctag.plc_tag_get_uint16(tag_handle, 0)
+        word = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
         return bool((word >> bit) & 1)
 
     else:
-        return _libplctag.plc_tag_get_int16(tag_handle, 0)
+        return _libplctag.plc_tag_get_int16(tag_handle, base_off)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -867,9 +1055,87 @@ class LibplctagConnection:
         self._handle_meta: dict[str, dict] = {}   # addr → meta from _build_tag_path
         self._type_hints: dict[str, str] = {}     # addr → L5X dataType (from tracer)
         self._err_seen: dict[str, str] = {}       # addr → last logged read error
+        # SLC data files whose block read failed — they fall back to one request
+        # per element. A block read is the single biggest win on PCCC, but it is
+        # the controller that decides how large a request it will answer, so a
+        # refusal must degrade instead of breaking the file.
+        self._slc_no_block: set = set()
+        # Per-file payload cap. A controller that refuses a large multi-element
+        # read gets a smaller one next cycle rather than losing block reads
+        # altogether — the request count matters far too much to surrender it
+        # over a size the SLC simply would not quote.
+        self._slc_block_cap: dict = {}
+        # Physical requests issued by the last read — the number the poll cycle
+        # is actually made of, after bits, structures and SLC blocks collapse.
+        self.last_phys_reads = 0
+        # Payload bytes those requests carry. On a serial-gateway link this is
+        # what the cycle time is made of, so it is the number to tune against.
+        self.last_phys_bytes = 0
         # ── DEBUG_SAVE counters: prove handle cache reuse (no duplicate reads) ──
         self._dbg_handle_hits = 0      # _get_or_create served from cache
         self._dbg_handle_creates = 0   # _get_or_create created a new libplctag handle
+
+    # ── parallel connections ------------------------------------------------
+    def _effective_groups(self) -> int:
+        """How many CIP connections to spread the watch list over.
+
+        Auto (0) picks 4 for Logix — a CompactLogix/ControlLogix has connection
+        slots to spare and answers packed requests in parallel — and 2 for
+        SLC/MicroLogix, whose PCCC stack is far more modest about concurrent
+        connections. Anything above 8 buys little: the controller's own scan
+        becomes the limit, and every group costs it a connection slot.
+        """
+        n = int(getattr(self.cfg, 'conn_groups', 0) or 0)
+        if n <= 0:
+            n = 4 if self.cfg.controller_type == 'logix' else 2
+        return max(1, min(16, n))
+
+    def _warn_if_slc_overparallel(self):
+        """PCCC gains almost nothing from extra connections — and loses a lot.
+
+        An SLC/MicroLogix answers one request at a time no matter how many
+        connections are open, so beyond two the extra requests only queue up and
+        run out of time. Measured on a live SLC 5/05: 2 connections shaved the
+        cycle from 2500 to 2000 ms, 4 produced a wall of timeouts.
+        """
+        if self.cfg.controller_type != 'logix' and self._effective_groups() > 2:
+            log.warning(
+                f"{self._effective_groups()} connections on a PCCC controller: "
+                f"an SLC/MicroLogix serves requests one at a time, so more than 2 "
+                f"usually just adds timeouts. Use block reads (on by default) to "
+                f"shorten the cycle instead.")
+
+    def _group_for(self, name: str):
+        """Stable shard for a tag name; None when running on one connection."""
+        n = self._effective_groups()
+        if n <= 1:
+            return None
+        # crc32 (not hash()) — deterministic across restarts, so a tag keeps its
+        # connection and the handle cache survives a reconnect unchanged.
+        base = name[:-len(_LGX_STRUCT_SENTINEL)] if name.endswith(_LGX_STRUCT_SENTINEL) else name
+        return zlib.crc32(base.encode('utf-8')) % n
+
+    async def update_conn_groups(self, n: int):
+        async with self._lock:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._update_conn_groups_sync, n)
+
+    def _update_conn_groups_sync(self, n: int):
+        """Change the connection count; every handle must be rebuilt.
+
+        The group id is baked into the connection string at creation time, so
+        live handles keep their old session until they are destroyed.
+        """
+        n = max(0, min(16, int(n)))
+        if n == int(getattr(self.cfg, 'conn_groups', 0) or 0):
+            return
+        self.cfg.conn_groups = n
+        cnt = len(self._handles)
+        self._destroy_all()
+        log.info(f"CIP connections → {self._effective_groups()}"
+                 + (" (auto)" if n == 0 else "")
+                 + (f"; {cnt} handle(s) dropped for rebuild" if cnt else ""))
+        self._warn_if_slc_overparallel()
 
     # ── type hints ---------------------------------------------------------
     def set_tag_types(self, type_map: dict):
@@ -976,7 +1242,12 @@ class LibplctagConnection:
                 "type": self.cfg.controller_type,
                 "backend": "libplctag",
             }
-            log.info(f"✓ Connected: {self.controller_info['name']}")
+            log.info(f"✓ Connected: {self.controller_info['name']} "
+                     f"· {self._effective_groups()} CIP connection(s)"
+                     + ("" if self.cfg.controller_type == 'logix'
+                        else f" · block reads "
+                             f"{'on' if getattr(self.cfg, 'slc_blocks', True) else 'off'}"))
+            self._warn_if_slc_overparallel()
             return True
         except Exception as e:
             self.connected = False
@@ -1060,7 +1331,38 @@ class LibplctagConnection:
                 bit_map[name] = (word_name, bit)
                 phys_set.add(word_name)
 
-        phys_names = list(phys_set)
+        phys_ok: dict[str, int] = {}      # phys_name -> handle (read complete)
+        phys_err: dict[str, dict] = {}    # phys_name -> error dict
+
+        # ── SLC: fold the physical set into block reads ────────────────────
+        # One PCCC request per address is what makes a big SLC watch list slow;
+        # contiguous runs of a data file collapse into a single request here.
+        block_of: dict[str, tuple[str, int]] = {}   # phys_name -> (block_key, byte_off)
+        if (not is_logix) and getattr(self.cfg, 'slc_blocks', True):
+            block_of = _plan_slc_blocks(
+                phys_set, self._slc_no_block,
+                lambda k: self._slc_block_cap.get(k, _SLC_BLOCK_BYTES),
+                getattr(self.cfg, 'slc_gap_bytes', _SLC_GAP_BYTES))
+        if block_of:
+            covered = set(block_of)
+            phys_names = sorted(phys_set - covered)
+            phys_names += sorted({k for k, _ in block_of.values()})
+        else:
+            phys_names = list(phys_set)
+
+        def _hit(phys_name):
+            """Handle + byte offset holding this address, or None if not read."""
+            b = block_of.get(phys_name)
+            if b is None:
+                h = phys_ok.get(phys_name)
+                return (h, 0) if h is not None else None
+            h = phys_ok.get(b[0])
+            return (h, b[1]) if h is not None else None
+
+        def _err_of(phys_name):
+            """Error recorded for this address, via its block when it has one."""
+            b = block_of.get(phys_name)
+            return phys_err.get(b[0]) if b else phys_err.get(phys_name)
 
         if DEBUG_SAVE:
             # Request de-duplication summary — proves the bridge never issues
@@ -1077,7 +1379,24 @@ class LibplctagConnection:
                 f"physical_reads={len(phys_names)} "
                 f"[bits={len(bit_map)} grouped into {n_words} words, "
                 f"struct_members={len(struct_map)} grouped into {n_structs} structs, "
-                f"direct={len(direct)}]")
+                f"direct={len(direct)}, "
+                f"slc_block_reads={len({k for k, _ in block_of.values()})} covering "
+                f"{len(block_of)} addresses]")
+        self.last_phys_reads = len(phys_names)
+
+        def _phys_bytes(n):
+            blk = _slc_parse_block_key(n)
+            if blk:
+                return blk[1] * blk[2]
+            meta = self._handle_meta.get(n) or {}
+            if meta.get('elem_size'):
+                return int(meta['elem_size'])
+            if is_logix:
+                return 4                      # not yet created: DINT-sized guess
+            parsed = _slc_parse_addr(n)
+            return _slc_block_elem_size(parsed[0]) if parsed else 2
+
+        self.last_phys_bytes = sum(_phys_bytes(n) for n in phys_names)
         # Snapshot handle-cache counters + start time so the post-read summary
         # can report reuse (no duplicate handle creation) and wall-clock cost.
         _dbg_hits0 = self._dbg_handle_hits
@@ -1085,79 +1404,159 @@ class LibplctagConnection:
         _dbg_t0 = time.monotonic()
 
         # ── Non-blocking batch read of the physical tag set ────────────────
-        phys_ok: dict[str, int] = {}      # phys_name -> handle (read complete)
-        phys_err: dict[str, dict] = {}    # phys_name -> error dict
-        pending: list[tuple[str, int]] = []
+        pending:  list[tuple[str, int]] = []   # read issued, waiting for data
+        creating: list[tuple[str, int]] = []   # handle still being set up
 
-        # Kick off all reads in non-blocking mode (timeout=0 → returns PENDING)
+        # A file whose block size was already stepped down this cycle. Several
+        # blocks of one file fail together, and halving once per failure would
+        # skip straight past the sizes the controller does accept.
+        shrunk: set = set()
+
+        def _fail(name: str, msg: str, drop: bool):
+            phys_err[name] = {"value": None, "type": "?", "error": msg,
+                              "ts": time.time()}
+            if drop:
+                self._drop_handle(name)
+                # A block read the controller refused (too many elements, file
+                # shorter than the run) must not keep failing every cycle: retire
+                # blocks for that data file and let its addresses be read one by
+                # one from the next cycle on. Timeouts do NOT land here — those
+                # are transient and keep the handle.
+                blk = _slc_parse_block_key(name)
+                if blk is not None:
+                    parsed = _slc_parse_addr(blk[0])
+                    if parsed:
+                        key = (parsed[0], parsed[1])
+                        if key in shrunk:
+                            return
+                        shrunk.add(key)
+                        cap = self._slc_block_cap.get(key, _SLC_BLOCK_BYTES) // 2
+                        if cap >= _SLC_BLOCK_BYTES_MIN:
+                            self._slc_block_cap[key] = cap
+                            log.warning(
+                                f"SLC block read refused on {parsed[0]}{parsed[1]} "
+                                f"({msg}) — retrying with {cap}-byte blocks")
+                        elif key not in self._slc_no_block:
+                            self._slc_no_block.add(key)
+                            log.warning(
+                                f"SLC block read failed on {parsed[0]}{parsed[1]} "
+                                f"({msg}) — falling back to one request per address "
+                                f"for this file")
+
+        def _decode(rc: int) -> str:
+            err = _libplctag.plc_tag_decode_error(rc)
+            return err.decode() if err else str(rc)
+
+        def _classify(name: str, handle: int, rc: int):
+            """Sort a plc_tag_read() return code into ok / pending / error."""
+            if rc == PLCTAG_STATUS_OK:
+                phys_ok[name] = handle
+            elif rc == PLCTAG_STATUS_PENDING or rc in _SOFT_READ_ERRS:
+                # BUSY: a read started in an earlier cycle has not landed yet.
+                # Its result goes into this same tag buffer, so there is nothing
+                # to re-issue — just keep waiting on the handle we already have.
+                pending.append((name, handle))
+            else:
+                _fail(name, _decode(rc), drop=True)
+
+        # Kick off creation AND reads for the whole set, all non-blocking.
+        # Handle creation is async too (plc_tag_create with timeout=0): a batch
+        # that pulls in hundreds of first-seen tags — what opening a cross
+        # reference on a big project does — used to serialise one blocking
+        # create per tag and stall the cycle for seconds before the read
+        # deadline even started. libplctag now sets them all up in parallel.
         for name in phys_names:
             try:
-                handle = self._get_or_create(name)
+                handle, is_new = self._get_or_create(name)
                 if handle is None:
-                    phys_err[name] = {"value": None, "type": "?",
-                                      "error": f"bad address: {name}", "ts": time.time()}
+                    _fail(name, f"bad address: {name}", drop=False)
                     continue
-                rc = _libplctag.plc_tag_read(handle, 0)
-                if rc == PLCTAG_STATUS_OK:
-                    phys_ok[name] = handle
-                elif rc == PLCTAG_STATUS_PENDING:
-                    pending.append((name, handle))
-                else:
-                    err = _libplctag.plc_tag_decode_error(rc)
-                    phys_err[name] = {"value": None, "type": "?",
-                                      "error": err.decode() if err else str(rc),
-                                      "ts": time.time()}
-                    self._drop_handle(name)
+                if is_new:
+                    creating.append((name, handle))  # read follows once setup ends
+                    continue
+                _classify(name, handle, _libplctag.plc_tag_read(handle, 0))
             except Exception as e:
-                phys_err[name] = {"value": None, "type": "?",
-                                  "error": str(e), "ts": time.time()}
-                self._drop_handle(name)
+                _fail(name, str(e), drop=True)
 
-        # Poll pending reads until all complete or overall timeout elapses
-        deadline = time.monotonic() + (_LIBPLCTAG_TIMEOUT / 1000.0)
-        while pending and time.monotonic() < deadline:
-            still: list[tuple[str, int]] = []
-            for name, handle in pending:
-                try:
-                    st = _libplctag.plc_tag_status(handle)
-                except Exception as e:
-                    phys_err[name] = {"value": None, "type": "?",
-                                      "error": str(e), "ts": time.time()}
-                    self._drop_handle(name)
-                    continue
-                if st == PLCTAG_STATUS_OK:
-                    phys_ok[name] = handle
-                elif st == PLCTAG_STATUS_PENDING:
-                    still.append((name, handle))
-                else:
-                    err = _libplctag.plc_tag_decode_error(st)
-                    phys_err[name] = {"value": None, "type": "?",
-                                      "error": err.decode() if err else str(st),
-                                      "ts": time.time()}
-                    self._drop_handle(name)
-            pending = still
+        # Poll until every read completes or the batch deadline elapses. The
+        # deadline covers setup + read — a first-seen tag needs both — and
+        # scales with the size of the batch: a controller reached over a serial
+        # gateway answers ~20 requests per second, so a flat 3 s would cut a
+        # perfectly healthy cycle short and report timeouts for the tail.
+        budget = max(_LIBPLCTAG_TIMEOUT / 1000.0,
+                     min(_READ_BUDGET_MAX, _READ_BUDGET_PER_REQ * len(phys_names)))
+        deadline = time.monotonic() + budget
+        while (pending or creating) and time.monotonic() < deadline:
+            # 1) handles still being set up → issue their read once ready
+            if creating:
+                still_c: list[tuple[str, int]] = []
+                for name, handle in creating:
+                    try:
+                        st = _libplctag.plc_tag_status(handle)
+                    except Exception as e:
+                        _fail(name, str(e), drop=True)
+                        continue
+                    if st == PLCTAG_STATUS_PENDING:
+                        still_c.append((name, handle))
+                    elif st == PLCTAG_STATUS_OK:
+                        try:
+                            _classify(name, handle, _libplctag.plc_tag_read(handle, 0))
+                        except Exception as e:
+                            _fail(name, str(e), drop=True)
+                    else:
+                        # Setup itself failed (unknown tag name, bad path) — the
+                        # handle is useless, drop it so it can be rebuilt later.
+                        _fail(name, _decode(st), drop=True)
+                creating = still_c
+            # 2) reads in flight
             if pending:
-                time.sleep(0.002)  # 2 ms — lets libplctag's I/O thread progress
+                still: list[tuple[str, int]] = []
+                for name, handle in pending:
+                    try:
+                        st = _libplctag.plc_tag_status(handle)
+                    except Exception as e:
+                        _fail(name, str(e), drop=True)
+                        continue
+                    if st == PLCTAG_STATUS_OK:
+                        phys_ok[name] = handle
+                    elif st == PLCTAG_STATUS_PENDING:
+                        still.append((name, handle))
+                    else:
+                        _fail(name, _decode(st), drop=st not in _SOFT_READ_ERRS)
+                pending = still
+            if pending or creating:
+                # Every pass costs one library call — and one tag mutex — per
+                # outstanding tag, so spinning at a flat 2 ms makes a big batch
+                # fight the very I/O threads it is waiting on. Scale the pause
+                # with the outstanding set: small batches stay snappy, large
+                # ones back off to 10 ms (a tail cost far below their own RTT).
+                outstanding = len(pending) + len(creating)
+                time.sleep(min(0.010, max(0.002, outstanding / 100000.0)))
 
-        # Any reads still pending at deadline → timeout
+        # Still unfinished at the deadline → report a timeout for THIS cycle but
+        # KEEP the handle. The read is in flight and normally lands a few ms
+        # later, so the next cycle collects it with no re-creation at all — that
+        # is what stops one slow cycle from cascading into a rebuild storm.
         for name, _h in pending:
-            phys_err[name] = {"value": None, "type": "?",
-                              "error": "read timeout", "ts": time.time()}
-            self._drop_handle(name)
+            _fail(name, "read timeout", drop=False)
+        for name, _h in creating:
+            _fail(name, "tag setup timeout", drop=False)
 
         # ── Assemble results under the ORIGINAL requested keys ─────────────
         for name in direct:
-            if name in phys_ok:
-                results[name] = self._extract_result(phys_ok[name], name)
+            hit = _hit(name)
+            if hit:
+                results[name] = self._extract_result(hit[0], name, hit[1])
             else:
-                results[name] = phys_err.get(name, {
-                    "value": None, "type": "?", "error": "read failed", "ts": time.time()})
+                results[name] = _err_of(name) or {
+                    "value": None, "type": "?", "error": "read failed", "ts": time.time()}
 
         for name, (word_name, bit) in bit_map.items():
-            if word_name in phys_ok:
-                results[name] = self._extract_bit(phys_ok[word_name], bit, is_logix)
+            hit = _hit(word_name)
+            if hit:
+                results[name] = self._extract_bit(hit[0], bit, is_logix, hit[1])
             else:
-                e = phys_err.get(word_name)
+                e = _err_of(word_name)
                 results[name] = dict(e) if e else {
                     "value": None, "type": "?", "error": "read failed", "ts": time.time()}
 
@@ -1179,7 +1578,9 @@ class LibplctagConnection:
             for n, e in phys_err.items():
                 msg = str(e.get('error'))
                 if self._err_seen.get(n) != msg:
-                    fresh.append(f"{n.replace(_LGX_STRUCT_SENTINEL, '(struct)')} → {msg}")
+                    label = (n.replace(_LGX_STRUCT_SENTINEL, '(struct)')
+                              .replace(_SLC_BLOCK_SENTINEL, ' ×'))   # N7:0 ×28
+                    fresh.append(f"{label} → {msg}")
                 self._err_seen[n] = msg
             if fresh:
                 more = f" (+{len(fresh) - 8} more)" if len(fresh) > 8 else ""
@@ -1305,7 +1706,7 @@ class LibplctagConnection:
             return {"value": None, "type": "?", "error": str(e), "ts": time.time()}
 
     @staticmethod
-    def _extract_bit(handle: int, bit: int, is_logix: bool) -> dict:
+    def _extract_bit(handle: int, bit: int, is_logix: bool, base_off: int = 0) -> dict:
         """Extract a single bit from an already-read parent-word handle.
 
         Mirrors the legacy per-bit extractors exactly:
@@ -1325,40 +1726,73 @@ class LibplctagConnection:
                             "ts": time.time()}
                 v = bool(rc)
             else:
-                word = _libplctag.plc_tag_get_uint16(handle, 0)
+                word = _libplctag.plc_tag_get_uint16(handle, base_off)
                 v = bool((word >> bit) & 1)
             return {"value": v, "type": "bool", "error": None, "ts": time.time()}
         except Exception as e:
             return {"value": None, "type": "?", "error": str(e), "ts": time.time()}
 
-    def _extract_result(self, handle: int, name: str) -> dict:
+    def _extract_result(self, handle: int, name: str, base_off: int = 0) -> dict:
         try:
             meta = self._handle_meta.get(name, {})
-            val = _read_tag_value(handle, name, meta)
+            val = _read_tag_value(handle, name, meta, base_off)
             vtype = type(val).__name__ if val is not None else "?"
             return {"value": val, "type": vtype, "error": None, "ts": time.time()}
         except Exception as e:
             return {"value": None, "type": "?", "error": str(e), "ts": time.time()}
 
     # ── handle cache ------------------------------------------------------
-    def _get_or_create(self, name: str):
+    def _get_or_create(self, name: str) -> tuple:
+        """Return (handle, is_new); (None, False) when the address is unusable.
+
+        `is_new` means the handle was just created and libplctag may still be
+        setting it up — the caller must wait for plc_tag_status() to leave
+        PENDING before issuing a read.
+
+        Creation is NON-BLOCKING (timeout=0). A blocking create cost one full
+        round-trip per first-seen tag, serially, so a watch list that suddenly
+        grew by a few hundred tags (opening a cross reference on a big project)
+        froze the whole poll cycle before a single read went out. Now libplctag
+        sets every new tag up concurrently on its own I/O thread.
+        """
         if name in self._handles:
             self._dbg_handle_hits += 1
-            return self._handles[name]
+            return self._handles[name], False
+        # SLC block handle: one request covering a run of a data file.
+        blk = _slc_parse_block_key(name)
+        if blk is not None:
+            first, esz, count = blk
+            path = _slc_tag_path(self.cfg.ip, self.cfg.slot, first)
+            if not path:
+                return None, False
+            # _slc_tag_path always emits elem_count=1 — widen it, keeping the
+            # element size it chose for this file type.
+            path = path.replace("&elem_count=1", f"&elem_count={count}", 1)
+            path = _with_conn_group(path, self._group_for(first))
+            tag = _libplctag.plc_tag_create(path.encode('utf-8'), 0)
+            if tag < 0:
+                return None, False
+            self._handles[name] = tag
+            self._handle_meta[name] = {'kind': 'slc', 'block': True,
+                                       'elem_size': esz, 'elem_count': count}
+            self._dbg_handle_creates += 1
+            return tag, True
         # Atomic TIMER/COUNTER/CONTROL structure handle (sentinel-keyed):
         # read the whole 12-byte element so every member shares one snapshot.
         if name.endswith(_LGX_STRUCT_SENTINEL):
             base = name[:-len(_LGX_STRUCT_SENTINEL)]
             cache_ms = int(max(0, self.cfg.poll_interval * 1000 * 0.8))
-            path = _logix_tag_path(self.cfg, base, _LGX_STRUCT_SIZE, cache_ms)
-            tag = _libplctag.plc_tag_create(path.encode('utf-8'), _LIBPLCTAG_TIMEOUT)
+            path = _with_conn_group(
+                _logix_tag_path(self.cfg, base, _LGX_STRUCT_SIZE, cache_ms),
+                self._group_for(name))
+            tag = _libplctag.plc_tag_create(path.encode('utf-8'), 0)
             if tag < 0:
-                return None
+                return None, False
             self._handles[name] = tag
             self._handle_meta[name] = {'kind': 'lgx', 'reader': 'struct',
                                        'elem_size': _LGX_STRUCT_SIZE}
             self._dbg_handle_creates += 1
-            return tag
+            return tag, True
         type_hint = self._type_hints.get(name)
         # Also try base name without "Program:Prog." prefix for hint lookup
         if type_hint is None and name.startswith('Program:'):
@@ -1367,16 +1801,17 @@ class LibplctagConnection:
                 type_hint = self._type_hints.get(parts[1])
         # 80% of poll_interval, bounded — lets libplctag dedupe rapid re-reads
         cache_ms = int(max(0, self.cfg.poll_interval * 1000 * 0.8))
-        path, meta = _build_tag_path(self.cfg, name, type_hint, cache_ms)
+        path, meta = _build_tag_path(self.cfg, name, type_hint, cache_ms,
+                                     group=self._group_for(name))
         if not path:
-            return None
-        tag = _libplctag.plc_tag_create(path.encode('utf-8'), _LIBPLCTAG_TIMEOUT)
+            return None, False
+        tag = _libplctag.plc_tag_create(path.encode('utf-8'), 0)
         if tag < 0:
-            return None
+            return None, False
         self._handles[name] = tag
         self._handle_meta[name] = meta or {}
         self._dbg_handle_creates += 1
-        return tag
+        return tag, True
 
     def _drop_handle(self, name: str):
         h = self._handles.pop(name, None)
@@ -1437,6 +1872,23 @@ def create_connection(cfg: Config):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Read results that mean "this cycle ran out of time", not "this tag is bad".
+_TIMEOUT_ERRS = ("read timeout", "tag setup timeout")
+
+# When to complain about the cycle length. Not "longer than the poll interval":
+# a controller reached over a serial gateway cannot serve a large watch list in
+# 200 ms and never will, so that comparison would fire every single cycle and
+# bury the log. This is the level where something is actually wrong.
+_CYCLE_WARN_MS = 3000.0
+
+# Batch read deadline: at least _LIBPLCTAG_TIMEOUT, then this much per physical
+# request, capped. Sized for the slowest link the bridge is used on — a PLC
+# serial port behind a COM-to-Ethernet converter, where one request costs tens
+# of milliseconds — so that a long-but-healthy cycle is never cut short.
+_READ_BUDGET_PER_REQ = 0.12   # seconds per request
+_READ_BUDGET_MAX = 10.0
+
+
 class TagPoller:
     def __init__(self, conn: LibplctagConnection, cfg: Config):
         self.conn = conn
@@ -1445,6 +1897,18 @@ class TagPoller:
         self.values  = {}
         self.subscribers = set()
         self._running = False
+        # ── Cycle telemetry (read by the GUI) ─────────────────────────────
+        # How long one full read of the watch set actually takes. When it grows
+        # past the poll interval the bridge is saturated: the tracer is asking
+        # for more tags than the controller can serve at that rate, which is
+        # what a wall of "read timeout" errors really means. The interval is
+        # NEVER changed automatically — this only reports the fact.
+        self.last_cycle_ms   = 0.0     # duration of the most recent read
+        self.avg_cycle_ms    = 0.0     # rolling average over the last 10 reads
+        self.last_timeouts   = 0       # tags that ran out of time last cycle
+        self.last_tag_count  = 0       # watch-list size read last cycle
+        self._cycle_hist     = collections.deque(maxlen=10)
+        self._overrun_logged = 0.0     # monotonic ts of the last overrun warning
 
     def subscribe(self, ws): self.subscribers.add(ws)
     def unsubscribe(self, ws): self.subscribers.discard(ws)
@@ -1472,14 +1936,46 @@ class TagPoller:
                 for t in stale:
                     self.values.pop(t, None)
             if self.watched:
-                new_vals = await self.conn.read_tags(list(self.watched))
+                tags = list(self.watched)
+                t0 = time.monotonic()
+                new_vals = await self.conn.read_tags(tags)
+                self._note_cycle(time.monotonic() - t0, len(tags), new_vals)
                 changed = {t:d for t,d in new_vals.items()
                            if self.values.get(t,{}).get("value") != d.get("value")
                            or self.values.get(t,{}).get("error")  != d.get("error")}
                 self.values.update(new_vals)
                 if changed:
                     await self._broadcast({"type":"values","data":changed})
+            else:
+                self.last_cycle_ms = 0.0
+                self.last_timeouts = 0
+                self.last_tag_count = 0
             await asyncio.sleep(self.cfg.poll_interval)
+
+    def _note_cycle(self, dt: float, n_tags: int, vals: dict):
+        """Record how long this read took and warn when it overruns.
+
+        The interval stays exactly where the user set it — an automatic
+        slow-down would hide the overload instead of showing it. The warning is
+        rate-limited to one line per 30 s so a saturated bridge does not bury
+        its own log.
+        """
+        self.last_cycle_ms  = dt * 1000.0
+        self.last_tag_count = n_tags
+        self.last_timeouts  = sum(1 for d in vals.values()
+                                  if d.get("error") in _TIMEOUT_ERRS)
+        self._cycle_hist.append(self.last_cycle_ms)
+        self.avg_cycle_ms = sum(self._cycle_hist) / len(self._cycle_hist)
+        if self.last_cycle_ms > _CYCLE_WARN_MS:
+            now = time.monotonic()
+            if now - self._overrun_logged >= 30.0:
+                self._overrun_logged = now
+                reads = getattr(self.conn, 'last_phys_reads', 0)
+                log.warning(
+                    f"poll cycle {self.last_cycle_ms:.0f} ms for {n_tags} tag(s) "
+                    f"in {reads} request(s)"
+                    + (f", {self.last_timeouts} timed out" if self.last_timeouts else "")
+                    + " — check the link, the watch list or the block settings")
 
     async def _broadcast(self, msg):
         payload = json.dumps(msg)
@@ -1609,10 +2105,12 @@ async def ws_handler(websocket, poller, conn, cfg):
                         msg.get("graphSnap", {}),
                         msg.get("tagIndex", []),
                         Path(cfg.records_dir),
+                        websocket,
                     )
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_start","ok":True}))
                 elif cmd == "rec_chunk":
-                    rec_chunk(msg.get("tagIndex", []), msg.get("frames", []))
+                    rec_chunk(msg.get("tagIndex", []), msg.get("frames", []),
+                              msg.get("graphSnap"))
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_chunk","ok":True}))
                 elif cmd == "rec_stop":
                     rec_stop()
@@ -1623,6 +2121,7 @@ async def ws_handler(websocket, poller, conn, cfg):
         log.info(f"WS disconnected: {e}")
     finally:
         poller.unsubscribe(websocket)
+        rec_stop_if_owner(websocket)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1787,6 +2286,15 @@ def parse_args():
     p.add_argument("--rslinx",action="store_true")
     p.add_argument("--type",default=None,choices=["slc","logix"],help="Controller family: slc (default) | logix (ControlLogix/CompactLogix)")
     p.add_argument("--interval",type=float,default=POLL_IV)
+    p.add_argument("--slc-gap-bytes",type=int,default=None,dest="slc_gap_bytes",
+                   help="SLC block reads: unwanted bytes worth carrying inside a "
+                        "block to save one request. Low for a serial-gateway link "
+                        "(bytes cost wire time), high for direct Ethernet "
+                        "(requests cost scan time). Default 16.")
+    p.add_argument("--conn-groups",type=int,default=None,dest="conn_groups",
+                   help="Parallel CIP connections the watch list is spread over "
+                        "(0 = auto: 4 for logix, 2 for slc). More connections = "
+                        "overlapping round-trips = shorter poll cycle.")
     p.add_argument("--config",default=None)
     p.add_argument("--slc",default=None,help="SLC/APS file to load address list from")
     p.add_argument("--ws-port",type=int,default=DEFAULT_WS)
@@ -1811,6 +2319,8 @@ if __name__=="__main__":
         cfg.controller_type=args.type
         cfg.processor_type="Logix5000" if args.type=="logix" else cfg.processor_type
     if args.interval:     cfg.poll_interval=args.interval
+    if args.conn_groups is not None: cfg.conn_groups=args.conn_groups
+    if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
     if args.slc:          cfg.slc_path=args.slc
     if args.ws_port:      cfg.port_ws=args.ws_port
     if args.http_port:    cfg.port_http=args.http_port

@@ -5,6 +5,7 @@ PLC Bridge — GUI Control Panel
 
 Запускает мост прямо из окна:
   • Настройка IP / slot / тип / интервал
+  • Список сохранённого оборудования (имя + IP) для быстрого переключения
   • Кнопки Запустить / Остановить / Переподключить
   • Статус соединения и кол-во опрашиваемых тегов
   • Лог с фильтрацией по уровню
@@ -12,7 +13,7 @@ PLC Bridge — GUI Control Panel
 WebSocket (порт 8765) поднимается автоматически — tracer подключается как обычно.
 """
 
-import sys, threading, asyncio, time, logging
+import sys, threading, asyncio, time, logging, json, os
 from queue import Queue, Empty
 from pathlib import Path
 
@@ -24,6 +25,7 @@ try:
         MemoryLogHandler, LogBuffer, ws_handler,
         create_connection, set_debug_save,
         LIBPLCTAG_OK, WS_OK, DEFAULT_WS,
+        _CYCLE_WARN_MS as CYCLE_WARN_MS,
     )
 except ImportError as e:
     import tkinter as tk
@@ -38,7 +40,7 @@ except ImportError:
     websockets = None
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 BG    = "#0a0f14"
@@ -63,6 +65,112 @@ LOG_FG = {
 }
 LEVEL_ORD = {"DEBUG":0,"INFO":1,"WARNING":2,"WARN":2,"ERROR":3,"CRITICAL":4}
 FILTER_THR = {"ALL":-1,"INFO":1,"WARN":2,"ERROR":3}
+
+
+# ── Saved devices ─────────────────────────────────────────────────────────────
+DEV_FILE = Path(__file__).parent / "plc_bridge_devices.json"
+
+
+class DeviceStore:
+    """Named connection presets ("оборудование"), persisted next to the script.
+
+    File: {"version":1, "last":<name>, "devices":[{name, ip, slot, type,
+    interval, rslinx}, ...]}.  A missing or broken file degrades to an empty
+    list — the panel must stay usable without it, this is a convenience
+    feature and never a precondition for connecting.
+    """
+
+    def __init__(self, path: Path = DEV_FILE):
+        self.path    = path
+        self.devices = []      # list[dict], sorted by name
+        self.last    = ""      # name of the last selected device
+        self.load()
+
+    # ── persistence ───────────────────────────────────────────────────────────
+    def load(self):
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            logging.getLogger("bridge500").warning(
+                f"Список оборудования не прочитан ({self.path.name}): {e}")
+            return
+        self.last = str(raw.get("last", "") or "")
+        for d in raw.get("devices", []):
+            try:
+                dev = self._norm(d)
+            except Exception:
+                continue          # skip a single malformed entry, keep the rest
+            if dev["name"] and dev["ip"]:
+                self.devices.append(dev)
+        self._sort()
+
+    def save(self) -> bool:
+        """Atomic write via staging file — same approach as the recorder."""
+        tmp = self.path.with_suffix(".tmp")
+        try:
+            tmp.write_text(
+                json.dumps({"version": 1, "last": self.last,
+                            "devices": self.devices},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            os.replace(tmp, self.path)
+            return True
+        except Exception as e:
+            logging.getLogger("bridge500").error(
+                f"Список оборудования не сохранён ({self.path}): {e}")
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return False
+
+    # ── contents ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _norm(d: dict) -> dict:
+        return {
+            "name":     str(d.get("name", "")).strip(),
+            "ip":       str(d.get("ip", "")).strip(),
+            "slot":     int(d.get("slot", 0) or 0),
+            "type":     "logix" if str(d.get("type", "slc")).lower() == "logix" else "slc",
+            "interval": max(0.2, float(d.get("interval", 0.2) or 0.2)),
+            # Parallel CIP connections; 0 = auto. Presets written before this
+            # setting existed simply come back as auto.
+            "groups":   max(0, min(16, int(d.get("groups", 0) or 0))),
+            "rslinx":   bool(d.get("rslinx", False)),
+        }
+
+    @staticmethod
+    def label(d: dict) -> str:
+        return f"{d['name']}  ·  {d['ip']}:{d['slot']}  ·  {d['type']}"
+
+    def _sort(self):
+        self.devices.sort(key=lambda d: d["name"].lower())
+
+    def find(self, name: str):
+        n = (name or "").strip().lower()
+        return next((d for d in self.devices if d["name"].lower() == n), None)
+
+    def put(self, dev: dict) -> bool:
+        """Add or overwrite by name (case-insensitive) and persist."""
+        dev = self._norm(dev)
+        old = self.find(dev["name"])
+        if old:
+            self.devices.remove(old)
+        self.devices.append(dev)
+        self._sort()
+        self.last = dev["name"]
+        return self.save()
+
+    def remove(self, name: str) -> bool:
+        d = self.find(name)
+        if not d:
+            return False
+        self.devices.remove(d)
+        if self.last.strip().lower() == name.strip().lower():
+            self.last = ""
+        return self.save()
 
 
 # ── Bridge controller ─────────────────────────────────────────────────────────
@@ -105,7 +213,8 @@ class BridgeController:
     def reconnect(self):
         asyncio.run_coroutine_threadsafe(self._reconnect(), self.loop)
 
-    def apply_config(self, ip, slot, ctrl_type, interval, via_rslinx, records_dir=""):
+    def apply_config(self, ip, slot, ctrl_type, interval, via_rslinx, records_dir="",
+                     conn_groups=None):
         need_rc = (ip        != self.cfg.ip             or
                    slot      != self.cfg.slot           or
                    ctrl_type != self.cfg.controller_type or
@@ -120,6 +229,14 @@ class BridgeController:
             self.cfg.records_dir = records_dir
         if self.poller:
             self.poller.cfg.poll_interval = interval
+        if conn_groups is not None and conn_groups != self.cfg.conn_groups:
+            # Handles carry their connection id from creation, so switching the
+            # count means rebuilding them — the connection itself stays up.
+            if self.conn and self._running:
+                asyncio.run_coroutine_threadsafe(
+                    self.conn.update_conn_groups(conn_groups), self.loop)
+            else:
+                self.cfg.conn_groups = conn_groups
         if need_rc and self._running:
             self.reconnect()
 
@@ -175,6 +292,19 @@ class BridgeController:
                 self.q.put(("watching",
                             list(self.poller.watched),
                             self.conn.connected))
+                # Real cost of one poll cycle. When it exceeds the interval the
+                # bridge cannot keep up with the current watch list — that is
+                # what produces "read timeout" on tags.
+                self.q.put(("stats", {
+                    "cycle_ms":  self.poller.last_cycle_ms,
+                    "avg_ms":    self.poller.avg_cycle_ms,
+                    "timeouts":  self.poller.last_timeouts,
+                    "interval":  self.cfg.poll_interval,
+                    "groups":    self.conn._effective_groups(),
+                    "reads":     getattr(self.conn, "last_phys_reads", 0),
+                    "bytes":     getattr(self.conn, "last_phys_bytes", 0),
+                    "connected": self.conn.connected,
+                }))
                 # Always push a snapshot (even empty) so the GUI can drop stale rows
                 # when tags are removed from the watch list.
                 self.q.put(("values", dict(self.poller.values)))
@@ -187,7 +317,7 @@ class App(tk.Tk):
         super().__init__()
         self.title("PLC Bridge")
         self.configure(bg=BG)
-        self.geometry("760x600")
+        self.geometry("760x640")
         self.minsize(640, 520)
 
         self.bridge      = BridgeController(Queue())
@@ -195,6 +325,9 @@ class App(tk.Tk):
         self._log_filter = tk.StringVar(value="ALL")
         self._dbg_save   = tk.BooleanVar(value=False)
         self._all_log    = []   # full unfiltered list of log records
+        self._devs       = DeviceStore()
+        self._started    = False  # bridge running — decides the hint after a preset switch
+        self._hint_job   = None   # pending after() that clears the hint label
 
         self._build()
         self._poll()
@@ -224,6 +357,23 @@ class App(tk.Tk):
         p = tk.Frame(cf, bg=CARD, padx=14, pady=12)
         p.pack(fill=tk.X)
 
+        # Row 0 — saved devices
+        r0 = tk.Frame(p, bg=CARD)
+        r0.pack(fill=tk.X, pady=(0, 8))
+
+        _lbl(r0, "Оборудование").pack(side=tk.LEFT)
+        self._v_dev  = tk.StringVar(value="")
+        self._cb_dev = ttk.Combobox(r0, textvariable=self._v_dev, state="readonly",
+                                    values=[], width=36, font=MONO9)
+        self._cb_dev.pack(side=tk.LEFT, padx=(4, 8))
+        self._cb_dev.bind("<<ComboboxSelected>>", self._on_dev_select)
+
+        _btn_sm(r0, "💾 Сохранить", self._on_dev_save).pack(side=tk.LEFT, padx=(0, 4))
+        _btn_sm(r0, "✕ Удалить",   self._on_dev_delete).pack(side=tk.LEFT)
+
+        self._lbl_hint = tk.Label(r0, text="", bg=CARD, fg=TEXT2, font=MONO9)
+        self._lbl_hint.pack(side=tk.LEFT, padx=10)
+
         # Row 1 — type · IP · slot
         r1 = tk.Frame(p, bg=CARD)
         r1.pack(fill=tk.X, pady=(0, 8))
@@ -249,6 +399,15 @@ class App(tk.Tk):
         _lbl(r2, "Интервал, с").pack(side=tk.LEFT)
         self._v_iv = tk.StringVar(value="0.2")
         _entry(r2, self._v_iv, width=6).pack(side=tk.LEFT, padx=(4, 20))
+
+        # Parallel CIP connections. One connection = one request in flight, so a
+        # long watch list is read strictly round-trip after round-trip; spreading
+        # it over several connections overlaps them and shortens the cycle.
+        _lbl(r2, "Соединений").pack(side=tk.LEFT)
+        self._v_groups = tk.StringVar(value="0")
+        _entry(r2, self._v_groups, width=4).pack(side=tk.LEFT, padx=(4, 4))
+        tk.Label(r2, text="0 = авто", bg=CARD, fg=TEXT2,
+                 font=MONO9).pack(side=tk.LEFT, padx=(0, 20))
 
         self._v_rslinx = tk.BooleanVar(value=False)
         tk.Checkbutton(r2, text="RSLinx Gateway", variable=self._v_rslinx,
@@ -285,6 +444,10 @@ class App(tk.Tk):
         _lbl(strip, "Тегов в опросе:").pack(side=tk.LEFT)
         self._lbl_tags = tk.Label(strip, text="—", bg=BG, fg=TEXT, font=MONO9)
         self._lbl_tags.pack(side=tk.LEFT, padx=6)
+        # Cycle time — green while the read fits the interval, amber when it
+        # overruns it, red once tags start timing out.
+        self._lbl_cycle = tk.Label(strip, text="", bg=BG, fg=TEXT2, font=MONO9)
+        self._lbl_cycle.pack(side=tk.LEFT, padx=(12, 0))
 
         # ─ Separator ─
         tk.Frame(self, bg=BORD, height=1).pack(fill=tk.X)
@@ -392,6 +555,13 @@ class App(tk.Tk):
 
         self._tv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        # Fill the preset list and pre-select the one used last time. Only the
+        # input fields are restored — nothing connects until the user says so.
+        self._refresh_dev_combo(select=self._devs.last)
+        d = self._devs.find(self._devs.last)
+        if d:
+            self._apply_dev(d)
+
     def _style(self):
         s = ttk.Style()
         s.theme_use("default")
@@ -428,6 +598,7 @@ class App(tk.Tk):
     def _on_start(self):
         self._sync_cfg()
         self.bridge.start()
+        self._started = True
         self._btn_start.config(state=tk.DISABLED)
         self._btn_stop.config(state=tk.NORMAL)
         self._btn_rc.config(state=tk.NORMAL)
@@ -437,11 +608,13 @@ class App(tk.Tk):
 
     def _on_stop(self):
         self.bridge.stop()
+        self._started = False
         self._btn_start.config(state=tk.NORMAL)
         self._btn_stop.config(state=tk.DISABLED)
         self._btn_rc.config(state=tk.DISABLED)
         self._lbl_ws.config(text="")
         self._lbl_tags.config(text="—", fg=TEXT)
+        self._lbl_cycle.config(text="", fg=TEXT2)
 
     def _on_reconnect(self):
         self._sync_cfg()
@@ -456,9 +629,112 @@ class App(tk.Tk):
                 interval    = max(0.2, float(self._v_iv.get() or 0.2)),
                 via_rslinx  = self._v_rslinx.get(),
                 records_dir = self._v_recdir.get().strip(),
+                conn_groups = max(0, min(16, int(self._v_groups.get() or 0))),
             )
         except ValueError:
             pass
+
+    # ── Saved devices ─────────────────────────────────────────────────────────
+    def _refresh_dev_combo(self, select: str = ""):
+        labels = [DeviceStore.label(d) for d in self._devs.devices]
+        self._cb_dev["values"] = labels
+        d = self._devs.find(select) if select else None
+        if d:
+            self._v_dev.set(DeviceStore.label(d))
+        elif self._v_dev.get() not in labels:
+            self._v_dev.set("")
+
+    def _selected_dev(self):
+        """Current combobox row → device dict. Readonly combobox, so the index
+        is always in sync with the list order used to fill it."""
+        i = self._cb_dev.current()
+        return self._devs.devices[i] if 0 <= i < len(self._devs.devices) else None
+
+    def _apply_dev(self, d: dict):
+        """Fill the connection fields from a preset. Deliberately does NOT
+        reconnect: dropping a live connection because a list item was clicked
+        would be a nasty surprise. The user presses Запустить/Переподключить."""
+        self._v_type.set(d["type"])
+        self._v_ip.set(d["ip"])
+        self._v_slot.set(str(d["slot"]))
+        self._v_iv.set(str(d["interval"]))
+        self._v_groups.set(str(d.get("groups", 0)))
+        self._v_rslinx.set(d["rslinx"])
+
+    def _hint(self, text: str, ms: int = 5000):
+        self._lbl_hint.config(text=text)
+        if self._hint_job:
+            self.after_cancel(self._hint_job)
+        self._hint_job = self.after(ms, lambda: self._lbl_hint.config(text=""))
+
+    def _on_dev_select(self, _evt=None):
+        d = self._selected_dev()
+        if not d:
+            return
+        self._apply_dev(d)
+        self._devs.last = d["name"]
+        self._devs.save()
+        self._hint("↻ нажмите Переподключить" if self._started else "поля заполнены")
+
+    def _on_dev_save(self):
+        ip = self._v_ip.get().strip()
+        if not ip:
+            messagebox.showwarning("Нет адреса",
+                                   "Сначала введите IP адрес.", parent=self)
+            return
+        try:
+            dev = {"name": "",
+                   "ip": ip,
+                   "slot": int(self._v_slot.get() or 0),
+                   "type": self._v_type.get(),
+                   "interval": float(self._v_iv.get() or 0.2),
+                   "groups": int(self._v_groups.get() or 0),
+                   "rslinx": self._v_rslinx.get()}
+        except ValueError:
+            messagebox.showwarning("Неверные данные",
+                                   "Slot и интервал должны быть числами.", parent=self)
+            return
+
+        cur  = self._selected_dev()
+        name = _ask_name(self, "Сохранить оборудование", "Имя оборудования:",
+                         initial=(cur["name"] if cur else ""))
+        if name is None:
+            return
+        name = name.strip()
+        if not name:
+            messagebox.showwarning("Пустое имя",
+                                   "Имя не может быть пустым.", parent=self)
+            return
+        if self._devs.find(name) and not messagebox.askyesno(
+                "Перезаписать?",
+                f"«{name}» уже есть в списке. Перезаписать?", parent=self):
+            return
+
+        dev["name"] = name
+        if self._devs.put(dev):
+            self._refresh_dev_combo(select=name)
+            self._hint(f"«{name}» сохранено")
+        else:
+            messagebox.showerror("Ошибка",
+                                 f"Не удалось записать список:\n{self._devs.path}",
+                                 parent=self)
+
+    def _on_dev_delete(self):
+        d = self._selected_dev()
+        if not d:
+            self._hint("выберите оборудование в списке")
+            return
+        if not messagebox.askyesno("Удалить?",
+                                   f"Удалить «{d['name']}» из списка?", parent=self):
+            return
+        if self._devs.remove(d["name"]):
+            self._v_dev.set("")
+            self._refresh_dev_combo()
+            self._hint(f"«{d['name']}» удалено")
+        else:
+            messagebox.showerror("Ошибка",
+                                 f"Не удалось записать список:\n{self._devs.path}",
+                                 parent=self)
 
     # ── Queue consumer ────────────────────────────────────────────────────────
     def _poll(self):
@@ -489,10 +765,60 @@ class App(tk.Tk):
             self._lbl_tags.config(
                 text=str(n) if n else "—",
                 fg=ACC if (connected and n) else TEXT2)
+        elif kind == "stats":
+            self._update_stats(msg[1])
         elif kind == "log":
             self._append_log(msg[1])
         elif kind == "values":
             self._update_values(msg[1])
+
+    def _update_stats(self, st: dict):
+        """Cycle time next to the tag count.
+
+        Colour is the whole point of this readout: amber means the read of the
+        current watch list no longer fits the poll interval, red means tags are
+        already timing out. The interval itself is never touched automatically —
+        it stays exactly where it was set, so this is the only place the
+        overload becomes visible before values start dropping out.
+        """
+        if not st.get("connected"):
+            self._lbl_cycle.config(text="", fg=TEXT2)
+            return
+        cycle = st.get("cycle_ms") or 0.0
+        interval = st.get("interval") or 0.0
+        timeouts = st.get("timeouts") or 0
+        if cycle <= 0:
+            self._lbl_cycle.config(text="", fg=TEXT2)
+            return
+        text = f"Цикл: {cycle:.0f} мс · интервал {interval:.2f} с"
+        reads = st.get("reads")
+        if reads:
+            # Requests, not tags: bits fold into their word, timer members into
+            # one structure read, and SLC runs into one block read.
+            text += f" · запросов: {reads}"
+            # Payload beside it, because which of the two costs more depends on
+            # the link: a request costs scan time on a direct connection, bytes
+            # cost wire time behind a serial gateway. Both visible = tunable.
+            nbytes = st.get("bytes") or 0
+            if nbytes:
+                text += (f" · {nbytes / 1024:.1f} КБ" if nbytes >= 1024
+                         else f" · {nbytes} Б")
+        groups = st.get("groups")
+        if groups:
+            # Shown because it is the knob that moves the cycle time: one
+            # connection reads the watch list strictly round-trip by round-trip.
+            text += f" · соед.: {groups}"
+        if timeouts:
+            text += f" · таймаутов: {timeouts}"
+            col = ERR
+        elif cycle > CYCLE_WARN_MS:
+            # Not "longer than the interval": a controller behind a serial
+            # gateway never fits 200 ms, and a permanently amber readout says
+            # nothing. Amber is kept for a cycle that is genuinely too long.
+            col = WARN
+        else:
+            col = ACC
+        self._lbl_cycle.config(text=text, fg=col)
 
     # ── Log ───────────────────────────────────────────────────────────────────
     def _append_log(self, r):
@@ -593,6 +919,54 @@ def _btn(parent, text, cmd, state=tk.NORMAL,
                      bg=bg, fg=fg, font=MONO, bd=0, padx=14, pady=6,
                      cursor="hand2", activebackground=abg, activeforeground=afg,
                      highlightbackground=BORD, highlightthickness=1)
+
+def _btn_sm(parent, text, cmd, bg=CARD, fg=TEXT2, abg="#0d2030", afg=TEXT):
+    """Compact variant of _btn — fits inline next to a combobox."""
+    return tk.Button(parent, text=text, command=cmd,
+                     bg=bg, fg=fg, font=MONO9, bd=0, padx=8, pady=3,
+                     cursor="hand2", activebackground=abg, activeforeground=afg,
+                     highlightbackground=BORD, highlightthickness=1)
+
+
+def _ask_name(parent, title, prompt, initial=""):
+    """Modal single-line prompt in the app palette (simpledialog is stock-light
+    and looks foreign here). Returns the string, or None if cancelled."""
+    win = tk.Toplevel(parent, bg=CARD, padx=16, pady=14)
+    win.title(title)
+    win.resizable(False, False)
+    win.transient(parent)
+    out = {"v": None}
+
+    tk.Label(win, text=prompt, bg=CARD, fg=TEXT, font=MONO9).pack(anchor=tk.W)
+    var = tk.StringVar(value=initial)
+    ent = _entry(win, var, width=34)
+    ent.pack(fill=tk.X, pady=(6, 12))
+
+    def ok(_e=None):
+        out["v"] = var.get()
+        win.destroy()
+
+    row = tk.Frame(win, bg=CARD)
+    row.pack(fill=tk.X)
+    _btn_sm(row, "  OK  ", ok, bg=ACC, fg="#040e08",
+            abg="#2ab060", afg="#040e08").pack(side=tk.RIGHT, padx=(6, 0))
+    _btn_sm(row, "Отмена", win.destroy).pack(side=tk.RIGHT)
+
+    ent.bind("<Return>", ok)
+    win.bind("<Escape>", lambda _e: win.destroy())
+
+    # Centre over the parent before grabbing focus, otherwise the dialog lands
+    # at the top-left corner of the screen on Windows.
+    win.update_idletasks()
+    x = parent.winfo_rootx() + (parent.winfo_width()  - win.winfo_width())  // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - win.winfo_height()) // 3
+    win.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+    ent.focus_set()
+    ent.select_range(0, tk.END)
+    win.grab_set()
+    parent.wait_window(win)
+    return out["v"]
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
