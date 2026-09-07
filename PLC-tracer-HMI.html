@@ -106,6 +106,11 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .lad-item{display:flex;align-items:flex-start;gap:6px;padding:6px 8px;cursor:pointer;border-left:2px solid transparent;transition:all .1s;}
 .lad-item:hover{background:var(--bg3);}
 .lad-item.sel{background:#0a1e18;border-left-color:var(--acc);}
+.lad-item.lad-nolog{cursor:default;opacity:.5;}
+.lad-item.lad-nolog:hover{background:transparent;}
+.lad-nolog .lad-num{color:var(--text3);font-style:italic;}
+.lad-nolog .lad-name{color:var(--text3);}
+.lad-nolog .lad-cnt{color:var(--text3);font-style:italic;}
 .lad-num{font-family:var(--mono);font-size:10px;color:var(--text3);min-width:28px;text-align:right;flex-shrink:0;padding-top:1px;}
 .lad-name{font-family:var(--mono);font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;word-break:break-all;line-height:1.35;min-width:0;flex:1;}
 .lad-name.lad-shrink{font-size:8.9px;}
@@ -191,6 +196,26 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 #hmi-line-info .hli-acts{display:flex;gap:5px;margin-top:2px;}
 #hmi-line-info .hli-btn{flex:1;font-family:var(--mono);font-size:10px;background:#101a26;border:1px solid var(--border2);color:var(--text2);padding:5px;border-radius:3px;cursor:pointer;letter-spacing:.04em;}
 #hmi-line-info .hli-btn:hover{background:#152030;color:var(--acc);border-color:var(--acc);}
+/* ── HMI project documentation (PDF manual) ── */
+#hmi-docs-modal{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.55);}
+#hmi-docs-modal.show{display:flex;align-items:center;justify-content:center;}
+#hmi-docs-box{background:var(--bg2);border:1px solid var(--acc);border-radius:8px;padding:18px 20px;width:580px;max-width:92vw;box-shadow:0 8px 32px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:9px;}
+#hmi-docs-box h2{margin:0;font-family:var(--mono);font-size:12px;color:var(--acc);letter-spacing:.09em;}
+#hmi-docs-box .hd-hint{font-size:11px;color:var(--text3);line-height:1.45;}
+#hmi-docs-box .hd-lbl{font-family:var(--mono);font-size:10px;color:var(--text3);letter-spacing:.06em;}
+#hmi-docs-box label.hd-chk{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--text2);cursor:pointer;}
+#hmi-docs-box input[type=text],#hmi-docs-box select{font-family:var(--mono);font-size:11px;background:#0c1420;border:1px solid var(--border2);color:var(--text);padding:6px 8px;border-radius:3px;width:100%;box-sizing:border-box;}
+#hmi-docs-box .hd-line{display:flex;gap:6px;align-items:center;}
+#hmi-docs-box .hd-btn:disabled{opacity:.35;cursor:default;}
+#hmi-docs-box .hd-btn:disabled:hover{background:#101a26;color:var(--text2);border-color:var(--border2);}
+#hmi-docs-box .hd-btn{font-family:var(--mono);font-size:10px;background:#101a26;border:1px solid var(--border2);color:var(--text2);padding:6px 12px;border-radius:3px;cursor:pointer;letter-spacing:.05em;white-space:nowrap;}
+#hmi-docs-box .hd-btn:hover{background:#152030;color:var(--acc);border-color:var(--acc);}
+#hmi-docs-list{max-height:180px;overflow-y:auto;border:1px solid var(--border);border-radius:3px;display:none;flex-direction:column;}
+#hmi-docs-list .hd-file{font-family:var(--mono);font-size:11px;color:var(--text2);padding:5px 9px;cursor:pointer;border-bottom:1px solid var(--border);}
+#hmi-docs-list .hd-file:last-child{border-bottom:none;}
+#hmi-docs-list .hd-file:hover{background:#152030;color:var(--acc);}
+#hmi-docs-list .hd-file.sel{background:#101a26;color:var(--acc);}
+#hmi-docs-prev{font-family:var(--mono);font-size:11px;color:var(--green);background:#0a2018;border-radius:3px;padding:6px 9px;word-break:break-all;}
 
 /* ── HMI edit tools (text / line) — shown only in Edit mode ── */
 #hmi-tools{position:absolute;top:10px;left:50%;transform:translateX(-50%);display:none;gap:5px;background:rgba(12,16,20,.92);border:1px solid var(--border);border-radius:4px;padding:5px;box-shadow:0 3px 16px rgba(0,0,0,.5);z-index:40;}
@@ -258,6 +283,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .g-toolbar{position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:5px;}
 .g-btn{font-family:var(--mono);font-size:11px;background:rgba(12,16,20,.9);border:1px solid var(--border);color:var(--text2);padding:5px 10px;cursor:pointer;border-radius:2px;letter-spacing:.06em;transition:all .15s;}
 .g-btn:hover{border-color:var(--acc);color:var(--acc);}
+.g-btn.on{border-color:var(--acc);color:var(--acc);}
 .g-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;pointer-events:none;}
 .g-empty-icon{font-size:50px;opacity:.07;}
 .g-empty-txt{font-family:var(--mono);font-size:11px;color:var(--text3);letter-spacing:.1em;}
@@ -551,6 +577,8 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
         <span class="g-btn" id="hmi-size-val" title="Indicator &amp; label size in pixels of the original image — one value for the whole project, scales together with the background zoom" style="cursor:default;flex:1;text-align:center;">◯ 12</span>
         <button class="g-btn" id="hmi-btn-size-inc" title="Increase indicator size (project-wide)" style="padding:5px 9px;">+</button>
       </div>
+      <button class="g-btn hmi-edit-only" id="hmi-btn-label" title="Indicator captions (project-wide, saved with the layout): OFF → tag NAME → physical I/O address. Authoring setting — run mode just shows the result. Logix projects start with captions OFF; hover an indicator for name, scope, description and value.">🏷 —</button>
+      <button class="g-btn hmi-edit-only" id="hmi-btn-docs" title="Attach the project PDF manual (folder Manuals) — right-clicking an I/O tag then opens it with the tag typed into the PDF search">📄 DOCS</button>
       <button class="g-btn hmi-edit-only" id="hmi-btn-save" title="Save HMI layout to JSON file">↓ SAVE HMI</button>
       <button class="g-btn" id="hmi-btn-load" title="Load HMI layout from JSON file">↑ LOAD HMI</button>
     </div>
@@ -568,6 +596,7 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
     <textarea id="hmi-text-editor" spellcheck="false"></textarea>
     <input type="file" id="fi-hmi-img" accept="image/png,image/jpeg,image/gif,image/bmp,image/webp" style="display:none">
     <input type="file" id="fi-hmi-json" accept=".json,.slc,.l5x,.L5X,.xml,.prn,.sy6" multiple style="display:none">
+    <input type="file" id="fi-hmi-docs" accept="application/pdf,.pdf" webkitdirectory directory multiple style="display:none">
     <div id="hmi-ind-menu"></div>
     <div id="hmi-line-info"></div>
   </div>
@@ -645,6 +674,36 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 
 <div id="tt"><div class="tt-n" id="tt-n"></div><div class="tt-s" id="tt-s"></div><div class="tt-t" id="tt-t"></div><div class="tt-d" id="tt-d"></div><div class="tt-ops" id="tt-ops"></div><div class="tt-v" id="tt-v"></div></div>
 <div id="tag-menu"></div>
+
+<div id="hmi-docs-modal">
+  <div id="hmi-docs-box">
+    <h2>📄 PROJECT DOCUMENTATION</h2>
+    <div class="hd-hint">One PDF manual for the whole project. Right-clicking any <b>physical I/O</b> tag on the schematic then offers OPEN DOCS, which opens the PDF with the tag typed into the viewer&#39;s search box, and copied to the clipboard as well — in the PDF that is Ctrl+F, Ctrl+V.<br><b>Text fields</b> can search too: switch <i>Docs</i> on in the field&#39;s properties, and its own text is searched as written (no address conversion).<br>The path is relative to the tracer folder — keep the file under <b>Manuals\</b> next to PLC-tracer-HMI.html.</div>
+    <label class="hd-chk"><input type="checkbox" id="hd-enabled"> enable OPEN DOCS for I/O tags</label>
+    <div class="hd-lbl">PDF PATH</div>
+    <div class="hd-line">
+      <input type="text" id="hd-path" placeholder="Manuals/SiloSystem/silo system.pdf" spellcheck="false">
+      <button class="hd-btn" id="hd-browse" title="Pick the Manuals folder — every PDF inside it (subfolders included) is listed below">📁 BROWSE</button>
+    </div>
+    <div id="hmi-docs-list"></div>
+    <div class="hd-lbl">HOW THE ADDRESS IS WRITTEN IN THE DRAWING</div>
+    <div class="hd-line">
+      <select id="hd-fmt"></select>
+      <button class="hd-btn" id="hd-fmt-add" title="Add your own format">＋ NEW</button>
+      <button class="hd-btn" id="hd-fmt-del" title="Delete the selected custom format (built-in ones stay)">✕</button>
+    </div>
+    <div class="hd-line" id="hd-fmt-edit" style="display:none;">
+      <input type="text" id="hd-fmt-name" placeholder="format name" style="flex:0 0 36%;" maxlength="60">
+      <input type="text" id="hd-fmt-tpl" placeholder="{L}{S}-{P}" spellcheck="false" maxlength="80">
+    </div>
+    <div class="hd-hint" id="hd-fmt-help">Template fields: <b>{L}</b> letter I/O · <b>{S}</b> slot · <b>{W}</b> word · <b>{B}</b> bit · <b>{P}</b> point (word×16+bit) · <b>{TAG}</b> tag as labelled · <b>{ADDR}</b> address as is. Pad with a width: <b>{P:3}</b> → 007. Anything else in the template is copied literally.</div>
+    <div id="hmi-docs-prev"></div>
+    <div class="hd-line" style="justify-content:flex-end;margin-top:2px;">
+      <button class="hd-btn" id="hd-test" title="Open the PDF now with the previewed search term">🔎 TEST OPEN</button>
+      <button class="hd-btn" id="hd-close">CLOSE</button>
+    </div>
+  </div>
+</div>
 
 <div id="about-modal">
   <div id="about-box">
@@ -1363,6 +1422,7 @@ function parseL5X(xmlText){
 
   const syms = {};    // tagName (as-written) → {sym, desc, dataType, value}
   const rungs = [];
+  const otherRoutines = [];  // FBD / ST / SFC — listed, not decoded
   let projName = '';
 
   // ── Controller name ──
@@ -1705,6 +1765,14 @@ function parseL5X(xmlText){
       const routName = routEl.getAttribute('Name') || 'MainRoutine';
       const rungEls  = routEl.querySelectorAll('RLLContent > Rung');
 
+      // Non-ladder routines (FBD, ST, SFC, Sequence) are not decoded. They used
+      // to disappear without a trace, so a tag written only from an FBD sheet
+      // looked like a tag nobody writes. Record them for the routine list.
+      const routType = routEl.getAttribute('Type') || '';
+      if(!rungEls.length && routType && routType !== 'RLL'){
+        otherRoutines.push({ file: `${progName}/${routName}`, type: routType });
+      }
+
       rungEls.forEach(rungEl=>{
         const rungNum  = parseInt(rungEl.getAttribute('Number') || '0');
         const rungType = rungEl.getAttribute('Type') || 'N';
@@ -2025,7 +2093,7 @@ function parseL5X(xmlText){
 
 
   // ── Mark project as L5X ──
-  return { name: projName, syms, rungs, isL5X: true };
+  return { name: projName, syms, rungs, isL5X: true, otherRoutines };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2144,6 +2212,19 @@ function splitTopCommas(s){
   return parts.filter(Boolean);
 }
 
+// ── First operand that names a tag rather than a literal ───────
+// Neutral text puts the constant first as readily as the tag: EQU(1000,Step),
+// MOV(5,Dst), ADD(1,Count,Count). The primary address used to be ops[0] with no
+// fallback, so an instruction written that way was dropped whole — no cell, no
+// cross-reference, no polling — and the rung was drawn without the condition
+// that actually gates it.
+function firstTagOperand(ops){
+  for(const op of ops){
+    if(op && /^[A-Za-z_]/.test(op) && !/^-?[\d.]+$/.test(op)) return op;
+  }
+  return '';
+}
+
 // ── Extract flat instruction list from NeutralText ─────────────
 function extractInsL5X(text){
   const tokens = tokeniseL5X(text);
@@ -2219,13 +2300,27 @@ function extractInsL5X(text){
     else if((inst === 'COP' || inst === 'CPS') && ops.length >= 2){
       addr = ops[1]; // COP/CPS destination is the SECOND operand
     }
+    // AVE(Array, Dim, Dest, Control, Length, Position) — the destination is
+    // ops[2]. The generic "last operand" rule below pointed the write at the
+    // CONTROL structure instead, so the tag that actually receives the average
+    // reported zero writers and the trace stopped there.
+    else if(inst === 'AVE' && ops.length >= 3){
+      addr = ops[2];
+    }
+    // SRT(Array, Dim, Control, Length, Position) sorts in place — the array is
+    // both source and destination, and there is no destination operand at all.
+    else if(inst === 'SRT' && ops.length >= 1){
+      addr = ops[0];
+    }
     // Math/move instructions: destination is LAST operand
     else if(L5X_MATH_DEST.has(inst) && ops.length >= 2){
       const last = ops[ops.length-1];
       if(/^[A-Za-z_]/.test(last) && !/^-?[\d.]+$/.test(last)) addr = last;
     }
-    if(!addr) continue;
-    if(/^-?[\d.]+$/.test(addr)) continue; // pure numeric literal
+    // A literal in the primary slot is not a reason to discard the whole
+    // instruction — fall back to the first operand that names a tag.
+    if(!addr || /^-?[\d.]+$/.test(addr)) addr = firstTagOperand(ops);
+    if(!addr) continue; // nothing but literals — genuinely nothing to trace
 
     result.push({ t: inst, g: addr, r: parseAddrRoleL5X(inst), operands: ops });
   }
@@ -2564,6 +2659,8 @@ function pageToCanvas(px, py){
 //  Returns tree node: {type:'seq'|'par'|'inst', children, inst}
 // ═══════════════════════════════════════════════════════
 const SKIP_TOK = new Set(['SOR','EOR','AFI','NOP','RET','RET_HOME']);
+// Compare instructions may be written with the constant first (EQU 100 N7:0)
+const CMP_I = new Set(['EQU','NEQ','GRT','GEQ','LES','LEQ','LIM','MEQ']);
 // Tokens that are definitely full instruction mnemonics (all uppercase letters)
 function isMnemonic(tok){ return /^[A-Z]{2,5}$/.test(tok) && tok !== 'BST' && tok !== 'NXB' && tok !== 'BND'; }
 
@@ -2626,6 +2723,12 @@ function parseRungTextTree(text){
       g = ops[1] || g;
     }
     // MEQ Source Mask Compare — primary is source (ops[0]), already default
+    // Compare with a constant source (EQU 100 N7:0) — address the tag, not the
+    // constant, so the cell resolves and the tag gets a cross-reference entry.
+    if(CMP_I.has(mnem) && ops.length >= 2 && !looksLikeAddr(g)){
+      const firstAddr = ops.find(o=>looksLikeAddr(o));
+      if(firstAddr) g = firstAddr;
+    }
     if(MATH_DEST_I.has(mnem) && ops.length >= 1){
       const last = ops[ops.length-1];
       if(looksLikeAddr(last) && !/^-?[\d.]+$/.test(last)) g = last;
@@ -2645,6 +2748,11 @@ function parseRungTextTree(text){
         children.push(par);
       } else if(t === 'NXB' || t === 'BND'){
         break;
+      } else if(t === 'AFI'){
+        // Same as the L5X path: an AFI rung is dead, so it must be visible.
+        // Checked before SKIP_TOK, which still bounds operand collection.
+        consume();
+        children.push({type:'inst', inst:{t:'AFI', g:'__afi', r:'in', operands:[]}});
       } else if(SKIP_TOK.has(t)){
         consume();
       } else if(isMnemonic(t)){
@@ -2658,6 +2766,7 @@ function parseRungTextTree(text){
           (t === 'CPT' && ops.length >= 1) ||       // CPT dest expression
           ((t === 'COP' || t === 'FLL') && ops.length >= 2) || // COP/FLL src dest len
           (t === 'LIM' && ops.length >= 2 && /^[#A-Za-z]/.test(ops[1])) || // LIM: Test is ops[1]
+          (CMP_I.has(t) && ops.length >= 2 && ops.some(o=>looksLikeAddr(o))) || // EQU 100 N7:0
           ((t==='JSR'||t==='JMP'||t==='LBL') && /^\d+$/.test(ops[0])) // file number operand
         );
         if(hasMeaningfulOp){
@@ -2702,11 +2811,16 @@ function parseL5XRungTree(neutralText){
   const tokens = tokeniseL5X(neutralText);
   let pos = 0;
 
-  const L5X_SKIP = new Set(['NOP','AFI','END','ENDTASK']);
+  const L5X_SKIP = new Set(['NOP','END','ENDTASK']);
 
   function makeInstNode(tok){
     const inst = normalizeL5XInst(tok.inst);
     if(L5X_SKIP.has(inst)) return null;
+    // AFI is "always false" — it kills the rung. Skipping it drew a permanently
+    // dead rung as an ordinary live one, which is the one error worth avoiding
+    // above all others here. It carries no operand, so it gets the __afi
+    // pseudo-address; the tag collectors walk rung.ins and never see it.
+    if(inst === 'AFI') return {type:'inst', inst:{t:'AFI', g:'__afi', r:'in', operands:[]}};
     const ops = tok.ops.map(s=>s.trim()).filter(s=>s&&s!=='?');
 
     // Determine primary address (same logic as extractInsL5X)
@@ -2753,11 +2867,20 @@ function parseL5XRungTree(neutralText){
     else if((inst === 'COP' || inst === 'CPS') && ops.length >= 2){
       addr = ops[1];
     }
+    // AVE destination is ops[2]; SRT sorts its array in place (see extractInsL5X)
+    else if(inst === 'AVE' && ops.length >= 3){
+      addr = ops[2];
+    }
+    else if(inst === 'SRT' && ops.length >= 1){
+      addr = ops[0];
+    }
     else if(L5X_MATH_DEST.has(inst) && ops.length >= 2){
       const last = ops[ops.length-1];
       if(/^[A-Za-z_]/.test(last) && !/^-?[\d.]+$/.test(last)) addr = last;
     }
-    if(!addr || /^-?[\d.]+$/.test(addr)) addr = ops[0] || '?';
+    // Was: fall back to ops[0], which pinned a literal onto the cell — the cell
+    // then resolved nothing and stayed grey forever. Prefer a real tag.
+    if(!addr || /^-?[\d.]+$/.test(addr)) addr = firstTagOperand(ops) || ops[0] || '?';
 
     return {type:'inst', inst:{t:inst, g:addr, r:parseAddrRoleL5X(inst), operands:ops}};
   }
@@ -3274,7 +3397,7 @@ function parsePlcLiteral(s){
 //  DRAW ONE CONTACT / COIL CELL
 // ═══════════════════════════════════════════════════════
 // OUT_I declared above in parsers section
-const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET']);
+const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI']);
 
 // ── Resolve live value for a tag, following alias link if needed ──
 function resolveLV(tagName){
@@ -3483,6 +3606,9 @@ function _cellStateCore(inst){
     if(_d) console.log(`%c[cellState] "${inst.g}" AOI: no EnableOut → null`, 'color:#80c0ff');
     return null;
   }
+  // AFI never conducts, and it has no tag to look up — it has to answer
+  // before the lookup below, which would return null and draw it grey.
+  if(inst.t === 'AFI') return 'off';
   const lv = resolveLV(inst.g);
   if(!lv || lv.error){
     if(_d) console.log(`%c[cellState] "${inst.g}" t=${inst.t} → null (lv=${lv ? 'error:'+lv.error : 'undefined'})` +
@@ -3535,16 +3661,50 @@ function _cellStateCore(inst){
 
   // EQU/compare — check if current value equals operand
   if(['EQU','GRT','LES','GEQ','LEQ','NEQ','LIM'].includes(t)){
+    // LIM(LowLimit, Test, HighLimit): inst.g is Test (operands[1]), so the
+    // generic two-operand path below compared Test with itself and always fell
+    // through to null — a LIM cell never showed a state. True when
+    // Low <= Test <= High; when Low > High the test inverts (Test <= High OR
+    // Test >= Low), which is how both SLC 500 and Logix define it.
+    if(t === 'LIM' && inst.operands && inst.operands.length >= 3){
+      const numOf = a=>{
+        if(isBinaryWordAddr(a)){ const w = assembleBinaryWord(a); return w === null ? NaN : w; }
+        const litv = parsePlcLiteral(a);
+        if(litv !== null) return litv;
+        const l = resolveLV(a);
+        return l && !l.error ? parseFloat(l.value) : NaN;
+      };
+      const lo = numOf(inst.operands[0]), te = numOf(inst.operands[1]), hi = numOf(inst.operands[2]);
+      if(isNaN(lo) || isNaN(te) || isNaN(hi)){
+        if(_d) console.log(`%c  → LIM: incomplete (low=${lo}, test=${te}, high=${hi}) → null`, 'color:#ff6060');
+        return null;
+      }
+      const r = (lo <= hi) ? ((te >= lo && te <= hi) ? 'on' : 'off')
+                           : ((te <= hi || te >= lo) ? 'on' : 'off');
+      if(_d) console.log(`%c  → LIM(${lo}, ${te}, ${hi})${lo>hi?' [inverted]':''} = "${r}"`, 'color:#80c0ff');
+      return r;
+    }
     if(inst.operands && inst.operands.length >= 2){
-      // Resolve Source A (inst.g = operands[0])
+      // Source A is operands[0] positionally. inst.g is normally that same
+      // tag, but when Source A is a constant — EQU(1000,Step) — inst.g now
+      // carries the OTHER operand, and resolving Source A through inst.g
+      // would compare the tag with itself and report a permanent match.
+      const srcA = inst.operands[0];
       let fv;
-      if(isBinaryWordAddr(inst.g)){
-        const assembled = assembleBinaryWord(inst.g);
+      if(isBinaryWordAddr(srcA)){
+        const assembled = assembleBinaryWord(srcA);
         fv = assembled !== null ? assembled : NaN;
-        if(_d) console.log(`%c  → ${t}: srcA="${inst.g}" is binary word → assembled=${fv}`, 'color:#80c0ff');
+        if(_d) console.log(`%c  → ${t}: srcA="${srcA}" is binary word → assembled=${fv}`, 'color:#80c0ff');
       } else {
-        fv = parseFloat(v);
-        if(_d) console.log(`%c  → ${t}: srcA="${inst.g}" → parseFloat(${JSON.stringify(v)}) = ${fv}`, 'color:#80c0ff');
+        const litA = parsePlcLiteral(srcA);
+        if(litA !== null){
+          fv = litA;
+          if(_d) console.log(`%c  → ${t}: srcA="${srcA}" is a literal → ${fv}`, 'color:#80c0ff');
+        } else {
+          const lvA = (srcA === inst.g) ? lv : resolveLV(srcA);
+          fv = (lvA && !lvA.error) ? parseFloat(lvA.value) : NaN;
+          if(_d) console.log(`%c  → ${t}: srcA="${srcA}" → ${JSON.stringify(lvA ? lvA.value : null)} = ${fv}`, 'color:#80c0ff');
+        }
       }
       // Resolve Source B (operands[1]) — may also be a B-file word address
       let cmp;
@@ -3555,7 +3715,8 @@ function _cellStateCore(inst){
         if(_d) console.log(`%c  → ${t}: srcB="${srcB}" is binary word → assembled=${cmp}`, 'color:#80c0ff');
       } else {
         const lvB = resolveLV(srcB);
-        cmp = lvB ? parseFloat(lvB.value) : parseFloat(srcB);
+        const litB = parsePlcLiteral(srcB);   // 16#FF / 2#0101 / 8#777
+        cmp = lvB ? parseFloat(lvB.value) : (litB !== null ? litB : parseFloat(srcB));
         if(_d) console.log(`%c  → ${t}: srcB="${srcB}" → lvB=${lvB?JSON.stringify(lvB.value):'null'} → cmp=${cmp}`, 'color:#80c0ff');
       }
       if(!isNaN(cmp) && !isNaN(fv)){
@@ -3608,7 +3769,10 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
   // ── Compute state ──
   // AOI blocks may not have a direct liveValue but their sub-members (.EnableOut) do
   const _aoiBlock = inst.t.startsWith('AOI_');
-  const state = (hasLive && (lv || _aoiBlock)) ? (cellState(inst)||'null') : 'null';
+  // AFI is false with or without a PLC connection, so it is not gated on
+  // hasLive — an offline rung must already show that it is dead.
+  const state = (inst.t === 'AFI') ? 'off'
+              : (hasLive && (lv || _aoiBlock)) ? (cellState(inst)||'null') : 'null';
 
   // ── Debug draw trace (verbose only; logs first frame + every 60th frame to avoid flooding) ──
   if(_isDbgVerbose(inst.g) && (_dbgFrameN <= 1 || _dbgFrameN % 60 === 1)){
@@ -4072,6 +4236,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
     // Use origG (original NeutralText name) for display if available
     let fullLabel = inst.origG || inst.g;
     if(inst.g && inst.g.startsWith('__label:')) fullLabel = inst.g.slice(8); // strip __label: prefix
+    if(inst.g === '__afi') fullLabel = 'always false';
     if((inst.t==='JSR'||inst.t==='JMP'||inst.t==='LBL') && inst.fileNum){
       const fn = P?.syms[inst.g]?.sym;
       fullLabel = fn ? `${inst.fileNum}: ${fn}` : `FILE ${inst.fileNum}`;
@@ -6167,7 +6332,7 @@ function showTagMenu(anchorEl, addr, mouseEvent, fileHint, opts){
   if(!usages.length && !opts.hmiInd){
     // No usages — just select the tag
     // (from an HMI indicator the menu still opens: Copy / Remove must stay reachable)
-    if(!norm.startsWith('__label:')) selectTag(norm);
+    if(!norm.startsWith('__')) selectTag(norm); // __label:, __afi, __ret
     return;
   }
 
@@ -6885,6 +7050,36 @@ function isSyntheticAddr(a){ return /^U3:\d+$/i.test(a); }
 
 // Collect all real PLC tag addresses from the current graph:
 // — tag nodes (tag graph mode) + rung instruction tags (LADDER mode)
+// ── Tag operands beyond inst.g ─────────────────────────────────────────────
+// The watch list used to carry exactly one address per instruction — `inst.g`.
+// Every other operand stayed unread, so Source B of a compare, the sources of
+// MOV/ADD/MUL and the limits of LIM kept the value the project file was
+// exported with, and cellState() computed the green/red of a compare from that
+// stale number. Only instructions whose extra operands are plain scalar tags are
+// listed here: array/file, string, safety and AOI calls carry structures, enum
+// keywords or module references that cannot be read one scalar at a time.
+const OPERAND_TAG_I = new Set([
+  'EQU','NEQ','GRT','GEQ','LES','LEQ','LIM','MEQ',
+  'MOV','MVM','ADD','SUB','MUL','DIV','MOD','SQR','SQRT','NEG','ABS',
+  'AND','OR','XOR','NOT','BTD','SCP','SCL','TOD','FRD','DDV','PID'
+]);
+function instOperandTags(inst){
+  if(!inst || !inst.operands || inst.operands.length < 2) return [];
+  if(!OPERAND_TAG_I.has(inst.t)) return [];
+  const out = [];
+  for(const raw of inst.operands){
+    if(typeof raw !== 'string') continue;
+    const op = raw.trim();
+    if(!op || op === '?') continue;                             // NeutralText placeholder
+    if(parsePlcLiteral(op) !== null) continue;                  // 5, -1.5, 16#FF, 2#0101
+    if(!/^[A-Za-z_]/.test(op)) continue;
+    if(!/^[A-Za-z_][A-Za-z0-9_:.\/\[\]]*$/.test(op)) continue;  // no expressions / spaces
+    if(/\[[^\]]*[A-Za-z][^\]]*\]/.test(op)) continue;           // Arr[VarIndex] — not a scalar
+    out.push(op);
+  }
+  return out;
+}
+
 function getWatchTags(){
   if(!graphData && !hmiState.indicators.length && !hmiState.lines.some(l=>l.tag)
      && !hmiState.texts.some(_hmiTextHasRefs)
@@ -6926,6 +7121,7 @@ function getWatchTags(){
       n.rung.ins.forEach(i=>{
         if(!i.g || i.g.startsWith('__label:')) return;
         addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
+        instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
       });
     }
   });
@@ -6939,6 +7135,7 @@ function getWatchTags(){
     (rung.ins||[]).forEach(i=>{
       if(!i.g || i.g.startsWith('__label:')) return;
       addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
+      instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
     });
   });
   // HMI indicators — always watched, with timer/counter sub-member expansion
@@ -7340,6 +7537,7 @@ function _recKeySet(){
         n.rung.ins.forEach(i=>{
           if(!i.g || i.g.startsWith('__label:')) return;
           addKey(normalizeAddr(i.g), i.t, prog);
+          instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
         });
       }
     });
@@ -7352,6 +7550,7 @@ function _recKeySet(){
     rg.ins.forEach(i=>{
       if(!i.g || i.g.startsWith('__label:')) return;
       addKey(normalizeAddr(i.g), i.t, prog);
+      instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
     });
   });
   // Tags from HMI indicators
@@ -7552,6 +7751,8 @@ function loadProject(proj){
     hmiState.indicators = [];
     hmiState.texts = [];
     hmiState.lines = [];
+    hmiState.docs = {enabled:false, path:'', name:'', fmt:'asis', formats:[]}; // the manual belongs to the drawing
+    hmiState.labelMode = null;   // caption mode belongs to the drawing too → back to the per-format default
     hmiState.alarms = [];
     _hmiAlarmSince = Object.create(null); _hmiAlarmScroll = Object.create(null);
     hmiHover = null; hmiSel = null;
@@ -7564,6 +7765,7 @@ function loadProject(proj){
   // _hmiApplyLayout also forces Locked, so any load lands in run mode.
   hmiState.locked = true;
   _hmiUpdateLockBtn();
+  _hmiUpdateLabelBtn();   // the default caption mode depends on the project format
   resizeHMI();
   if(hmiState.img) fitHMI(); // image may have been loaded while #app was hidden (canvas 0×0)
 
@@ -7664,6 +7866,29 @@ function renderLadderList(){
     div.appendChild(nameSpan);
     div.appendChild(cntSpan);
     div.addEventListener('click', ()=> loadFullLadder(fileKey));
+    list.appendChild(div);
+    nameSpans.push(nameSpan);
+  });
+
+  // Routines whose logic this tool does not decode. Listing them greyed out is
+  // what keeps "nothing writes this tag" honest: the cross-reference cannot see
+  // inside an FBD sheet, and now neither can the user mistake it for empty.
+  (P.otherRoutines||[]).forEach(rt=>{
+    if(searchTerm && !rt.file.toLowerCase().includes(searchTerm)) return;
+    const div = document.createElement('div');
+    div.className = 'lad-item lad-nolog';
+    div.title = `${rt.type} routine — logic is not parsed. Tags used only here are not traced and will not appear in cross-references.`;
+    const numSpan = document.createElement('span');
+    numSpan.className = 'lad-num';
+    numSpan.textContent = rt.type;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'lad-name';
+    nameSpan.title = rt.file;
+    nameSpan.textContent = rt.file;
+    const cntSpan = document.createElement('span');
+    cntSpan.className = 'lad-cnt';
+    cntSpan.textContent = 'not parsed';
+    div.appendChild(numSpan); div.appendChild(nameSpan); div.appendChild(cntSpan);
     list.appendChild(div);
     nameSpans.push(nameSpan);
   });
@@ -9518,12 +9743,21 @@ let hmiState = {
   imgName: '',
   imgW: 0, imgH: 0,     // original image pixel dimensions
   indicators: [],       // [{id, tag, prog, instType, rungRef:{file,rungNum}, x, y}]
-  texts: [],            // [{id, x, y, text, fontSize, color, bg|null}]  coords/size in ORIGINAL IMAGE px
+  texts: [],            // [{id, x, y, text, fontSize, color, bg|null, fmt, docs}]  coords/size in ORIGINAL IMAGE px
   lines: [],            // [{id, pts:[{x,y}...], color, width, tag|null, prog|null}]  polyline snapped to 45°/90°, IMAGE px
   alarms: [],           // [{id, x, y, w, h, title, fontSize, color, bg, border, showTime, emptyText, rows:[{id, tag, prog, invert, text}]}]  IMAGE px
   cam: {x:0, y:0, z:1},
   locked: true,         // start in run mode (Edit OFF by default) — press EDIT to author
+  // Indicator caption mode — ONE project-wide value: 'off' | 'name' | 'io',
+  // null = per-format default. L5X tag names (Prog.UDT_Member.Bit) are long
+  // enough to bury the schematic, so Logix projects start with captions OFF;
+  // the hover tooltip carries name, scope, description and value anyway.
+  labelMode: null,
   indSize: 12,          // indicator circle radius + label/badge font base — ONE project-wide value in ORIGINAL IMAGE pixels (scales together with the background)
+  // Project documentation: ONE PDF manual, shared by every physical I/O tag.
+  // {enabled, path (relative to the tracer folder), name, fmt} — see the
+  // PROJECT DOCUMENTATION section further down.
+  docs: {enabled:false, path:'', name:'', fmt:'asis', formats:[]},
   projectName: '',
   _expectW: 0, _expectH: 0, _expectName: '' // expected image dims after autosave restore without image
 };
@@ -9590,6 +9824,40 @@ function indicatorState(ind){
   const st = cellState({t: ind.instType, g: ind.tag, operands: ind.operands});
   currentRungProg = saved;
   return st; // 'on' | 'off' | null
+}
+
+// ── Physical I/O address behind a tag ──
+// A Logix program tag reaches its module point through one or two AliasFor
+// hops ("MRO1_BG21" → "Local:13:I.Pt08.Data"); an SLC address IS the physical
+// point already. Returns '' when the tag has no physical address at all.
+const HMI_IO_RE = /^(?:[A-Za-z_]\w*:\d+:[IO]\b|[IO]:\d)/;
+function _hmiIoAlias(tag, prog){
+  if(!tag) return '';
+  if(HMI_IO_RE.test(tag)) return tag;            // already a module point / SLC address
+  const qual = prog && !tag.startsWith(prog + '.') ? prog + '.' + tag : null;
+  let cur = (qual && P?.syms?.[qual]) || P?.syms?.[tag] || null;
+  let last = '', hops = 0;
+  while(cur && cur.aliasFor && hops++ < 8){
+    last = cur.aliasFor;
+    if(HMI_IO_RE.test(last)) return last;        // reached the module point
+    cur = P?.syms?.[last];
+  }
+  return last;                                   // deepest alias target, or ''
+}
+// Effective caption mode — an explicit choice wins, otherwise the per-format
+// default (Logix names are long → hidden; SLC addresses are short → shown).
+function _hmiLabelMode(){
+  const m = hmiState.labelMode;
+  return (m === 'off' || m === 'name' || m === 'io') ? m : (P && P.isL5X ? 'off' : 'name');
+}
+// Caption text of one indicator under the current mode ('' → draw nothing).
+// I/O mode stays silent for tags with no module point rather than falling back
+// to the long name — the whole reason for the mode is a clean schematic.
+function _hmiIndLabel(ind){
+  const m = _hmiLabelMode();
+  if(m === 'off') return '';
+  if(m === 'io')  return _hmiIoAlias(ind.tag, ind.prog);
+  return ind.tag;
 }
 
 // Pure-numeric instructions: neutral blue circle + value badge (no on/off state)
@@ -9706,11 +9974,12 @@ function drawHMI(){
     }
 
     // tag label under the circle — scales with the background like the circle;
-    // skipped when zoomed out too far to be legible
+    // skipped when zoomed out too far to be legible, and when the project-wide
+    // caption mode yields no text (OFF, or I/O mode on a tag with no module point)
     const lf = hmiState.indSize * z;
-    if(lf >= 5){
+    const label = _hmiIndLabel(ind);
+    if(lf >= 5 && label){
       hmiCtx.font = lf + 'px Consolas,monospace';
-      const label = ind.tag;
       const tw = hmiCtx.measureText(label).width;
       const pad = Math.max(2, 3*z);
       const ly = p.y + R + Math.max(2, 5*z);
@@ -10375,8 +10644,13 @@ function showHMITT(ind, cx, cy){
   const sym  = info?.sym  || dEntry?.sym  || '';
   const desc = info?.desc || dEntry?.desc || '';
 
+  // Physical I/O address (AliasFor chain). The schematic itself may carry no
+  // captions at all, so the tooltip is where the module point has to show up.
+  const ioAddr = _hmiIoAlias(ind.tag, ind.prog);
+  const sLine = (ioAddr && ioAddr !== ind.tag) ? '→ ' + ioAddr : sym;
+
   document.getElementById('tt-n').textContent = `${ind.instType}  ${ind.tag}`;
-  const sEl = document.getElementById('tt-s'); sEl.textContent = sym; sEl.style.display = sym ? '' : 'none';
+  const sEl = document.getElementById('tt-s'); sEl.textContent = sLine; sEl.style.display = sLine ? '' : 'none';
   const tEl = document.getElementById('tt-t');
   const bits = [];
   if(info?.dataType) bits.push(info.dataType);
@@ -10460,6 +10734,7 @@ function _hmiLineInfoBody(ln){
     `<div class="hli-acts">` +
       `<button class="hli-btn" data-act="copy">⧉ COPY</button>` +
       `<button class="hli-btn" data-act="usages">↗ USAGES</button>` +
+      (hmiDocAvailable(ln.tag, ln.prog) ? `<button class="hli-btn" data-act="docs">📄 DOCS</button>` : '') +
     `</div>`;
 }
 function showHMILineInfo(ln, cx, cy){
@@ -10470,6 +10745,8 @@ function showHMILineInfo(ln, cx, cy){
   el.querySelector('[data-act="close"]').onclick = hideHMILineInfo;
   const cp = el.querySelector('[data-act="copy"]');
   if(cp) cp.onclick = ()=>{ copyToClipboard(ln.tag); hideHMILineInfo(); };
+  const dc = el.querySelector('[data-act="docs"]');
+  if(dc) dc.onclick = ()=>{ hideHMILineInfo(); hmiOpenDoc(ln.tag, ln.prog); };
   const us = el.querySelector('[data-act="usages"]');
   if(us) us.onclick = ev=>{
     const r = us.getBoundingClientRect();
@@ -10663,30 +10940,319 @@ hmiCanvas.addEventListener('wheel', e=>{
   scheduleHMIRedraw();
 }, {passive:false});
 
-// ── Indicator context menu (right click): Delete / Copy address ──
-hmiCanvas.addEventListener('contextmenu', e=>{
-  e.preventDefault();
-  // While drawing a line, right-click finishes it
-  if(hmiTool === 'line' && hmiLineDraft){ _hmiLineFinish(); return; }
-  const {x:cx, y:cy} = hmiPageToCanvas(e.clientX, e.clientY);
-  const ind = hmiHitTest(cx, cy);
-  if(!ind){ hmiHideIndMenu(); return; }
+// ════════════════════════════════════════════════════════════════
+//  PROJECT DOCUMENTATION — one PDF manual, opened at the I/O tag
+// ════════════════════════════════════════════════════════════════
+// The manual sits next to the tracer (folder Manuals\), so the layout stores a
+// RELATIVE path only and the PDF is reached by plain navigation — a file:// page
+// could not fetch() it anyway. Firefox renders PDFs with pdf.js, and its viewer
+// reads "#search=" from the URL and runs the find bar with it; that is what puts
+// the tag into the PDF search. Chrome/Edge ignore #search — the document still
+// opens there, just without the search filled in.
+// Only PHYSICAL I/O tags get the menu entry: timers, counters and internal bits
+// are not drawn in an electrical diagram.
+
+// Every format — built-in or user-added — is a TEMPLATE over the parsed module
+// point, so a drawing that follows none of the usual conventions can be described
+// in the DOCS window instead of in the code. User formats live in
+// hmiState.docs.formats and travel in the .hmi.json.
+const HMI_DOC_BUILTIN = [
+  {id:'asis',    name:'as shown on the indicator (tag name / address)', tpl:'{TAG}'},
+  {id:'slcfull', name:'I:2.0/1 — slot . word / bit',  tpl:'{L}:{S}.{W}/{B}'},
+  {id:'slcpt',   name:'I:2/1 — slot / point',         tpl:'{L}:{S}/{P}'},
+  {id:'dot',     name:'I2.1 — letter slot . point',   tpl:'{L}{S}.{P}'},
+  {id:'dash',    name:'I2-1 — letter slot - point',   tpl:'{L}{S}-{P}'}
+];
+const HMI_DOC_FMTS    = HMI_DOC_BUILTIN.map(f=>f.id);
+const HMI_DOC_TPL_RE  = /\{(TAG|ADDR|[LSWBP])(?::(\d+))?\}/g;
+const HMI_DOC_ADDR_RE = /\{[LSWBP](?::\d+)?\}/;   // template needs a parsed module point
+const HMI_DOC_MAX_FMT = 20;
+const HMI_L5X_IO_RE  = /\bLocal:[^:\s]+:[IO]\b/i;
+
+// Physical I/O address behind a tag, or null when the tag never reaches a module
+// point. SLC addresses already are physical; Logix program tags reach a module
+// through one or more AliasFor hops (same walk as l5xIOFilterMatch).
+function hmiIOPhys(tag, prog){
+  if(!tag) return null;
+  if(isPhysIO(tag)) return tag;                  // SLC    I:2.0/1
+  if(HMI_L5X_IO_RE.test(tag)) return tag;        // Logix  Local:2:I.Data.1
+  if(!P || !P.syms) return null;
+  const qual = prog && !tag.startsWith(prog + '.') ? prog + '.' + tag : tag;
+  let cur = P.syms[qual] || P.syms[tag], hops = 0;
+  while(cur && cur.aliasFor && hops++ < 8){
+    if(HMI_L5X_IO_RE.test(cur.aliasFor)) return cur.aliasFor;
+    cur = P.syms[cur.aliasFor];
+  }
+  return null;
+}
+function hmiDocsReady(){ return !!(hmiState.docs && hmiState.docs.enabled && hmiState.docs.path); }
+function hmiDocAvailable(tag, prog){ return hmiDocsReady() && !!hmiIOPhys(tag, prog); }
+
+// Physical address → {letter, slot, point}, point = word*16 + bit.
+// null for anything that is not a slot-based module point (remote modules,
+// analog words, odd member paths) — those are searched verbatim.
+function _hmiDocSplitIO(addr){
+  let m = /^([IO]):(\d+)\.(\d+)\/(\d+)$/i.exec(addr);                             // I:2.0/1
+  if(m) return {letter:m[1].toUpperCase(), slot:+m[2], point:(+m[3])*16 + (+m[4])};
+  m = /^([IO]):(\d+)\/(\d+)$/i.exec(addr);                                        // I:2/1
+  if(m) return {letter:m[1].toUpperCase(), slot:+m[2], point:+m[3]};
+  m = /^Local:(\d+):([IO])(?:\.[A-Za-z_]\w*)?(?:\[(\d+)\])?\.(\d+)$/i.exec(addr); // Local:2:I.Data[1].3
+  if(m) return {letter:m[2].toUpperCase(), slot:+m[1], point:(m[3]?+m[3]:0)*16 + (+m[4])};
+  return null;
+}
+// Format by id — built-in, then user-added; an id that no longer exists (deleted
+// format, foreign layout) falls back to the first built-in.
+function _hmiDocFmt(id){
+  return HMI_DOC_BUILTIN.find(f=>f.id === id) ||
+         ((hmiState.docs && hmiState.docs.formats) || []).find(f=>f.id === id) ||
+         HMI_DOC_BUILTIN[0];
+}
+function _hmiDocIsBuiltin(id){ return HMI_DOC_FMTS.includes(id); }
+// Fill a template from the address. A template that asks for slot/point while the
+// address is not a slot-based module point (remote module, analog word) would
+// render nonsense — the address is searched verbatim instead.
+function _hmiDocApplyTpl(tpl, tag, phys){
+  const p = _hmiDocSplitIO(phys);
+  if(!p && HMI_DOC_ADDR_RE.test(tpl)) return phys;
+  return tpl.replace(HMI_DOC_TPL_RE, (m, key, pad)=>{
+    let v;
+    if(key === 'TAG')       v = tag;
+    else if(key === 'ADDR') v = phys;
+    else if(key === 'L')    v = p.letter;
+    else if(key === 'S')    v = p.slot;
+    else if(key === 'W')    v = Math.floor(p.point/16);
+    else if(key === 'B')    v = p.point % 16;
+    else                    v = p.point;
+    v = String(v);
+    return pad ? v.padStart(Math.min(+pad, 8), '0') : v;
+  });
+}
+// The string handed to the PDF search box. Drawings follow no single convention,
+// so the project picks (or writes) the one its diagram uses.
+function hmiDocSearchTerm(tag, prog, fmtOverride){
+  const f    = _hmiDocFmt(fmtOverride || (hmiState.docs && hmiState.docs.fmt) || 'asis');
+  const phys = hmiIOPhys(tag, prog) || tag;
+  return _hmiDocApplyTpl(f.tpl, tag, phys) || tag;
+}
+// "_" busts an identical hash: re-opening the same document in the same tab must
+// still fire hashchange, otherwise pdf.js would not re-run the search.
+function _hmiDocHref(path, term){
+  const raw  = String(path || '').trim().replace(/\\/g, '/');
+  const base = (/^[a-z]+:\/\//i.test(raw) || raw.startsWith('/'))
+    ? encodeURI(raw)                                     // absolute / file:// URL — keep its shape
+    : raw.split('/').map(encodeURIComponent).join('/');  // relative to the tracer folder
+  return base + '#search=' + encodeURIComponent(term) + '&phrase=true&_=' + Date.now();
+}
+// The viewer's find field cannot be focused from here — the PDF is a separate
+// document of its own origin, and pdf.js has no URL parameter that opens the find
+// bar. The term goes to the clipboard instead, so continuing the search inside the
+// PDF is Ctrl+F, Ctrl+V. Copy BEFORE opening: the new tab takes the focus, and the
+// execCommand fallback needs this document focused.
+// Clipboard, synchronously. navigator.clipboard.writeText settles in a LATER
+// task, by which time the window.open below has handed the focus to the PDF tab
+// and Firefox refuses to write from an unfocused document — its rejection handler
+// then reaches execCommand equally unfocused. That is why only the term of the
+// very FIRST open ever reached the clipboard and every later one kept it stale.
+// execCommand finishes before window.open is even called, so it cannot lose that
+// race; the async API is left as a last resort for a build without execCommand.
+function _hmiDocCopy(term){
+  const ok = _copyFallback(term);
+  if(!ok && navigator.clipboard && window.isSecureContext)
+    navigator.clipboard.writeText(term).catch(()=>{});
+  return ok;
+}
+function _hmiDocOpen(term){
+  if(!hmiDocsReady() || !term) return;
+  const copied = _hmiDocCopy(term);
+  window.open(_hmiDocHref(hmiState.docs.path, term), 'plcTracerDocs');
+  showPrnToast('📄 ' + (hmiState.docs.name || hmiState.docs.path) +
+               '\nsearch: "' + term + '"' +
+               (copied ? '  — copied, in the PDF press Ctrl+F, Ctrl+V'
+                       : '  — could not reach the clipboard, type it after Ctrl+F'));
+}
+function hmiOpenDoc(tag, prog){ _hmiDocOpen(hmiDocSearchTerm(tag, prog)); }
+// A text field goes into the search AS WRITTEN — no address conversion, because
+// the field already spells the designation the way the drawing does. {TAG}
+// placeholders are resolved (what is shown is what is searched) and whitespace is
+// collapsed, so a wrapped multi-line box still searches as one phrase.
+function _hmiDocTextTerm(tx){ return _hmiResolvedText(tx).replace(/\s+/g, ' ').trim(); }
+function hmiTextDocAvailable(tx){ return !!(tx && tx.docs) && hmiDocsReady() && !!_hmiDocTextTerm(tx); }
+function hmiOpenDocText(tx){ _hmiDocOpen(_hmiDocTextTerm(tx)); }
+
+// ── Settings modal ──
+// A real tag off the schematic makes the format preview meaningful
+function _hmiDocsSampleTag(){
+  for(const i of hmiState.indicators) if(hmiIOPhys(i.tag, i.prog)) return {tag:i.tag, prog:i.prog};
+  for(const l of hmiState.lines)      if(l.tag && hmiIOPhys(l.tag, l.prog)) return {tag:l.tag, prog:l.prog};
+  for(const a of hmiState.alarms)
+    for(const r of (a.rows || []))    if(r.tag && hmiIOPhys(r.tag, r.prog)) return {tag:r.tag, prog:r.prog};
+  return null;
+}
+function _hmiDocsPreview(){
+  const el  = document.getElementById('hmi-docs-prev');
+  const s   = _hmiDocsSampleTag();
+  const tag = s ? s.tag : 'I:2.0/1', prog = s ? s.prog : null;
+  el.textContent = tag + '   →   PDF search: "' +
+    hmiDocSearchTerm(tag, prog, document.getElementById('hd-fmt').value) + '"' +
+    (s ? '' : '   (example — no I/O tag on the schematic yet)');
+}
+// Rebuild the picker from built-ins + user formats, keeping the current choice
+function _hmiDocsFillFmtSelect(){
+  const sel = document.getElementById('hd-fmt');
+  sel.innerHTML = HMI_DOC_BUILTIN.concat(hmiState.docs.formats || []).map(f=>
+    `<option value="${_hmiEsc(f.id)}">${_hmiEsc(f.name)}${_hmiDocIsBuiltin(f.id) ? '' : '   ·   ' + _hmiEsc(f.tpl)}</option>`
+  ).join('');
+  sel.value = _hmiDocFmt(hmiState.docs.fmt).id;
+}
+// Show the name/template row for a user format, hide it for a built-in one
+function _hmiDocsFmtUI(){
+  const id = document.getElementById('hd-fmt').value;
+  const f  = _hmiDocFmt(id), custom = !_hmiDocIsBuiltin(id);
+  document.getElementById('hd-fmt-edit').style.display = custom ? 'flex' : 'none';
+  document.getElementById('hd-fmt-del').disabled = !custom;
+  if(custom){
+    document.getElementById('hd-fmt-name').value = f.name;
+    document.getElementById('hd-fmt-tpl').value  = f.tpl;
+  }
+  _hmiDocsPreview();
+}
+function hmiDocsShow(){
+  const d = hmiState.docs;
+  document.getElementById('hd-enabled').checked = !!d.enabled;
+  document.getElementById('hd-path').value      = d.path || '';
+  if(!Array.isArray(d.formats)) d.formats = [];
+  _hmiDocsFillFmtSelect();
+  _hmiDocsFmtUI();
+  const list = document.getElementById('hmi-docs-list');
+  list.style.display = 'none'; list.innerHTML = '';
+  _hmiDocsPreview();
+  document.getElementById('hmi-docs-modal').classList.add('show');
+}
+function hmiDocsHide(){ document.getElementById('hmi-docs-modal').classList.remove('show'); }
+// The tracer opens the PDF by a path relative to its OWN folder, so whatever the
+// browser reports is reduced to the "Manuals/…" part of it.
+function _hmiDocRelPath(f){
+  const rel = (f.webkitRelativePath || f.name).replace(/\\/g, '/');
+  const m   = /(?:^|\/)(Manuals\/.*)$/i.exec(rel);
+  return m ? m[1] : 'Manuals/' + rel;
+}
+function _hmiDocsSetPath(p){
+  hmiState.docs.path = p;
+  hmiState.docs.name = p.split('/').pop();
+  document.getElementById('hd-path').value = p;
+  _hmiDocsPreview();
+}
+document.getElementById('hmi-btn-docs').addEventListener('click', hmiDocsShow);
+document.getElementById('hd-close').addEventListener('click', hmiDocsHide);
+document.getElementById('hmi-docs-modal').addEventListener('click', e=>{
+  if(e.target.id === 'hmi-docs-modal') hmiDocsHide();
+});
+document.getElementById('hd-enabled').addEventListener('change', e=>{
+  hmiState.docs.enabled = e.target.checked;
+});
+document.getElementById('hd-path').addEventListener('input', e=>{
+  const p = e.target.value.trim().replace(/\\/g, '/');
+  hmiState.docs.path = p;
+  hmiState.docs.name = p.split('/').pop();
+  _hmiDocsPreview();
+});
+document.getElementById('hd-fmt').addEventListener('change', e=>{
+  hmiState.docs.fmt = _hmiDocFmt(e.target.value).id;
+  _hmiDocsFmtUI();
+});
+document.getElementById('hd-fmt-add').addEventListener('click', ()=>{
+  if(!Array.isArray(hmiState.docs.formats)) hmiState.docs.formats = [];
+  if(hmiState.docs.formats.length >= HMI_DOC_MAX_FMT){
+    alert('Custom formats: ' + HMI_DOC_MAX_FMT + ' is the limit.'); return;
+  }
+  const f = {id: _hmiNewId('fmt-'), name: 'my format', tpl: '{L}{S}-{P}'};
+  hmiState.docs.formats.push(f);
+  hmiState.docs.fmt = f.id;
+  _hmiDocsFillFmtSelect(); _hmiDocsFmtUI();
+  const n = document.getElementById('hd-fmt-name'); n.focus(); n.select();
+});
+document.getElementById('hd-fmt-del').addEventListener('click', ()=>{
+  const id = document.getElementById('hd-fmt').value;
+  if(_hmiDocIsBuiltin(id)) return;                       // built-ins are not deletable
+  hmiState.docs.formats = (hmiState.docs.formats || []).filter(f=>f.id !== id);
+  hmiState.docs.fmt = 'asis';
+  _hmiDocsFillFmtSelect(); _hmiDocsFmtUI();
+});
+document.getElementById('hd-fmt-name').addEventListener('input', e=>{
+  const f = _hmiDocFmt(document.getElementById('hd-fmt').value);
+  if(_hmiDocIsBuiltin(f.id)) return;
+  f.name = e.target.value;
+  _hmiDocsFillFmtSelect();
+});
+document.getElementById('hd-fmt-tpl').addEventListener('input', e=>{
+  const f = _hmiDocFmt(document.getElementById('hd-fmt').value);
+  if(_hmiDocIsBuiltin(f.id)) return;
+  f.tpl = e.target.value;
+  _hmiDocsFillFmtSelect(); _hmiDocsPreview();
+});
+document.getElementById('hd-browse').addEventListener('click', ()=>document.getElementById('fi-hmi-docs').click());
+document.getElementById('hd-test').addEventListener('click', ()=>{
+  const path = document.getElementById('hd-path').value.trim();
+  if(!path){ alert('Set the path to the PDF first.'); return; }
+  const s = _hmiDocsSampleTag();
+  const term = s ? hmiDocSearchTerm(s.tag, s.prog, document.getElementById('hd-fmt').value) : 'I:0/0';
+  window.open(_hmiDocHref(path, term), 'plcTracerDocs');
+});
+// Folder pick: nothing is read or uploaded — only the names/relative paths are
+// used, which is all a plain link needs.
+document.getElementById('fi-hmi-docs').addEventListener('change', e=>{
+  const pdfs = [...e.target.files].filter(f=>/\.pdf$/i.test(f.name));
+  e.target.value = '';
+  const list = document.getElementById('hmi-docs-list');
+  if(!pdfs.length){ list.style.display = 'none'; alert('No PDF files in the selected folder.'); return; }
+  const paths = [...new Set(pdfs.map(_hmiDocRelPath))].sort((a, b)=>a.localeCompare(b));
+  list.innerHTML = paths.map(p=>`<div class="hd-file${p === hmiState.docs.path ? ' sel' : ''}" data-p="${_hmiEsc(p)}">${_hmiEsc(p)}</div>`).join('');
+  list.style.display = 'flex';
+  list.querySelectorAll('.hd-file').forEach(el=>{
+    el.onclick = ()=>{
+      list.querySelectorAll('.hd-file').forEach(x=>x.classList.remove('sel'));
+      el.classList.add('sel');
+      _hmiDocsSetPath(el.getAttribute('data-p'));
+    };
+  });
+});
+
+// Right-click menu for the objects that are not indicators (text fields, alarm
+// rows, lines). A text field claims the click only when it actually has something
+// to offer — DOCS switched on for it and a manual attached — otherwise the click
+// falls through to whatever sits under the box.
+function _hmiDocsCtxOther(cx, cy, e){
+  const tx = hmiHitText(cx, cy);
+  if(tx && hmiTextDocAvailable(tx)){ _hmiTextCtxMenu(tx, e); return; }
+  const row = _hmiAlarmRowUnder(cx, cy);   // tagged alarm row, else null
+  const ln  = row ? null : hmiHitLine(cx, cy);
+  const tag  = row ? row.tag  : (ln ? ln.tag  : null);
+  const prog = row ? row.prog : (ln ? ln.prog : null);
+  if(!tag) return;
   const m = document.getElementById('hmi-ind-menu');
   m.innerHTML =
-    `<div class="him-hdr">${ind.instType} ${ind.tag}</div>` +
+    `<div class="him-hdr">${_hmiEsc((row ? 'ALARM ROW ' : 'LINE ') + tag)}</div>` +
     `<div class="him-item" data-act="copy">⧉ COPY ADDRESS</div>` +
-    (hmiState.locked ? '' : `<div class="him-item" data-act="invert">${ind.invert ? '✓ ' : ''}⇄ INVERT GREEN/RED</div>`) +
-    (hmiState.locked ? '' : `<div class="him-item danger" data-act="del">✕ DELETE INDICATOR</div>`);
-  m.querySelector('[data-act="copy"]').addEventListener('click', ()=>{
-    copyToClipboard(ind.tag); hmiHideIndMenu();
-  });
-  m.querySelector('[data-act="invert"]')?.addEventListener('click', ()=>{
-    ind.invert = !ind.invert; hmiHideIndMenu(); scheduleHMIRedraw();
-  });
-  m.querySelector('[data-act="del"]')?.addEventListener('click', ()=>{
-    hmiHideIndMenu();
-    hmiDeleteIndicator(ind);
-  });
+    (hmiDocAvailable(tag, prog) ? `<div class="him-item" data-act="docs">📄 OPEN DOCS</div>` : '');
+  m.querySelector('[data-act="copy"]').addEventListener('click', ()=>{ copyToClipboard(tag); hmiHideIndMenu(); });
+  m.querySelector('[data-act="docs"]')?.addEventListener('click', ()=>{ hmiHideIndMenu(); hmiOpenDoc(tag, prog); });
+  _hmiPlaceIndMenu(m, e);
+}
+// Text field menu: its own text is the search term, so no address formatting here.
+function _hmiTextCtxMenu(tx, e){
+  const term = _hmiDocTextTerm(tx);
+  const m = document.getElementById('hmi-ind-menu');
+  m.innerHTML =
+    `<div class="him-hdr">${_hmiEsc('TEXT ' + term.slice(0, 40))}</div>` +
+    `<div class="him-item" data-act="copy">⧉ COPY TEXT</div>` +
+    `<div class="him-item" data-act="docs">📄 OPEN DOCS</div>`;
+  m.querySelector('[data-act="copy"]').addEventListener('click', ()=>{ copyToClipboard(term); hmiHideIndMenu(); });
+  m.querySelector('[data-act="docs"]').addEventListener('click', ()=>{ hmiHideIndMenu(); hmiOpenDocText(tx); });
+  _hmiPlaceIndMenu(m, e);
+}
+// Shared placement for #hmi-ind-menu: below-right of the cursor, flipped when
+// it would run off the window.
+function _hmiPlaceIndMenu(m, e){
   m.style.display = 'flex';
   let L = e.clientX + 2, T = e.clientY + 2;
   requestAnimationFrame(()=>{
@@ -10695,6 +11261,43 @@ hmiCanvas.addEventListener('contextmenu', e=>{
     m.style.left = L + 'px'; m.style.top = T + 'px';
   });
   m.style.left = L + 'px'; m.style.top = T + 'px';
+}
+
+// ── Indicator context menu (right click): Delete / Copy address ──
+hmiCanvas.addEventListener('contextmenu', e=>{
+  e.preventDefault();
+  // While drawing a line, right-click finishes it
+  if(hmiTool === 'line' && hmiLineDraft){ _hmiLineFinish(); return; }
+  const {x:cx, y:cy} = hmiPageToCanvas(e.clientX, e.clientY);
+  const ind = hmiHitTest(cx, cy);
+  // not an indicator: lines and alarm rows get their own (smaller) menu
+  if(!ind){ hmiHideIndMenu(); _hmiDocsCtxOther(cx, cy, e); return; }
+  const m = document.getElementById('hmi-ind-menu');
+  const ioAddr = _hmiIoAlias(ind.tag, ind.prog);
+  m.innerHTML =
+    `<div class="him-hdr">${_hmiEsc(ind.instType + ' ' + ind.tag)}</div>` +
+    `<div class="him-item" data-act="copy">⧉ COPY ADDRESS</div>` +
+    (ioAddr && ioAddr !== ind.tag ? `<div class="him-item" data-act="copyio">⧉ COPY ${_hmiEsc(ioAddr)}</div>` : '') +
+    (hmiDocAvailable(ind.tag, ind.prog) ? `<div class="him-item" data-act="docs">📄 OPEN DOCS</div>` : '') +
+    (hmiState.locked ? '' : `<div class="him-item" data-act="invert">${ind.invert ? '✓ ' : ''}⇄ INVERT GREEN/RED</div>`) +
+    (hmiState.locked ? '' : `<div class="him-item danger" data-act="del">✕ DELETE INDICATOR</div>`);
+  m.querySelector('[data-act="copy"]').addEventListener('click', ()=>{
+    copyToClipboard(ind.tag); hmiHideIndMenu();
+  });
+  m.querySelector('[data-act="copyio"]')?.addEventListener('click', ()=>{
+    copyToClipboard(ioAddr); hmiHideIndMenu();
+  });
+  m.querySelector('[data-act="docs"]')?.addEventListener('click', ()=>{
+    hmiHideIndMenu(); hmiOpenDoc(ind.tag, ind.prog);
+  });
+  m.querySelector('[data-act="invert"]')?.addEventListener('click', ()=>{
+    ind.invert = !ind.invert; hmiHideIndMenu(); scheduleHMIRedraw();
+  });
+  m.querySelector('[data-act="del"]')?.addEventListener('click', ()=>{
+    hmiHideIndMenu();
+    hmiDeleteIndicator(ind);
+  });
+  _hmiPlaceIndMenu(m, e);
 });
 function hmiHideIndMenu(){
   const m = document.getElementById('hmi-ind-menu');
@@ -11014,8 +11617,9 @@ function _hmiRenderTextProp(pp, tx){
         ['auto|AUTO — value as read','u16|U16 — word as unsigned','bcd|BCD — packed digits']
           .map(o=>{ const [v,t] = o.split('|'); return `<option value="${v}" ${(tx.fmt||'auto')===v?'selected':''}>${t}</option>`; }).join('') +
       `</select></div>` +
+      `<div class="pp-row"><label>Docs</label><input type="checkbox" id="pp-tx-docs" ${tx.docs?'checked':''}><span class="pp-grow"></span></div>` +
       (_hmiTextHasRefs(tx) ? `<div class="pp-state" style="background:#0d1a24;color:var(--blue)">${_hmiEsc(_hmiResolvedText(tx).replace(/\n/g,' ⏎ ').slice(0,60))}</div>` : '') +
-      `<div class="pp-note">double-click the field on the schematic to edit its text · <b>{TAG}</b> is replaced by the live value · <b>U16</b> reads a negative 16-bit word as unsigned, <b>BCD</b> unpacks nibble digits · per-tag override: <b>{TAG|bcd}</b></div>` +
+      `<div class="pp-note">double-click the field on the schematic to edit its text · <b>{TAG}</b> is replaced by the live value · <b>U16</b> reads a negative 16-bit word as unsigned, <b>BCD</b> unpacks nibble digits · per-tag override: <b>{TAG|bcd}</b><br><b>Docs</b>: right-click this field → OPEN DOCS searches the project manual for its text exactly as written — no address conversion. ${hmiDocsReady() ? '' : 'Attach a PDF in 📄 DOCS first.'}</div>` +
       `<button class="pp-del" data-act="del">✕ DELETE TEXT</button>` +
     `</div>`;
   pp.querySelector('[data-act="close"]').onclick = ()=> hmiDeselect();
@@ -11023,6 +11627,7 @@ function _hmiRenderTextProp(pp, tx){
   pp.querySelector('#pp-tx-size').oninput = e=>{ tx.fontSize = Math.max(4, Math.min(200, parseInt(e.target.value)||14)); if(_hmiEditingText===tx){ _hmiStyleTextEditor(tx); _hmiPositionTextEditor(); } scheduleHMIRedraw(); };
   pp.querySelector('#pp-tx-color').oninput = e=>{ tx.color = e.target.value; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); };
   pp.querySelector('#pp-tx-fmt').onchange  = e=>{ tx.fmt = HMI_FMTS.includes(e.target.value) ? e.target.value : 'auto'; _hmiRenderProp(); scheduleHMIRedraw(); };
+  pp.querySelector('#pp-tx-docs').onchange = e=>{ tx.docs = e.target.checked; };
   const bgOn = pp.querySelector('#pp-tx-bgon'), bgC = pp.querySelector('#pp-tx-bg');
   bgOn.onchange = ()=>{ tx.bg = bgOn.checked ? bgC.value : null; bgC.disabled = !bgOn.checked; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); };
   bgC.oninput   = ()=>{ if(bgOn.checked){ tx.bg = bgC.value; if(_hmiEditingText===tx) _hmiStyleTextEditor(tx); scheduleHMIRedraw(); } };
@@ -11157,14 +11762,19 @@ function copyToClipboard(text){
     navigator.clipboard.writeText(text).catch(()=>_copyFallback(text));
   } else _copyFallback(text);
 }
+// Returns whether the copy actually happened. execCommand runs and FINISHES
+// inside this call — callers that hand the focus away right afterwards depend on
+// that (see _hmiDocCopy).
 function _copyFallback(text){
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.position = 'fixed'; ta.style.opacity = '0';
   document.body.appendChild(ta);
   ta.select();
-  try{ document.execCommand('copy'); }catch(e){}
+  let ok = false;
+  try{ ok = document.execCommand('copy'); }catch(e){}
   ta.remove();
+  return ok;
 }
 
 // ── Image loading ──
@@ -11311,6 +11921,25 @@ function _hmiSetIndSize(v){
 function _hmiUpdateSizeUI(){
   document.getElementById('hmi-size-val').textContent = '◯ ' + hmiState.indSize;
 }
+// Project-wide indicator captions: OFF → tag NAME → physical I/O address.
+// One button, one state field — an authoring setting like indSize, so the
+// button is hmi-edit-only; an explicit choice is kept in the layout file and a
+// project always reopens the way it was authored.
+const HMI_LABEL_MODES = ['off','name','io'];
+function _hmiUpdateLabelBtn(){
+  const b = document.getElementById('hmi-btn-label');
+  if(!b) return;
+  const m = _hmiLabelMode();
+  b.textContent = m === 'off' ? '🏷 OFF' : m === 'io' ? '🏷 I/O' : '🏷 NAME';
+  b.classList.toggle('on', m !== 'off');
+}
+document.getElementById('hmi-btn-label').addEventListener('click', ()=>{
+  const i = HMI_LABEL_MODES.indexOf(_hmiLabelMode());
+  hmiState.labelMode = HMI_LABEL_MODES[(i + 1) % HMI_LABEL_MODES.length];
+  _hmiUpdateLabelBtn();
+  scheduleHMIRedraw();
+});
+_hmiUpdateLabelBtn();
 document.getElementById('hmi-btn-size-dec').addEventListener('click', ()=>_hmiSetIndSize(hmiState.indSize - 2));
 document.getElementById('hmi-btn-size-inc').addEventListener('click', ()=>_hmiSetIndSize(hmiState.indSize + 2));
 document.getElementById('hmi-btn-save').addEventListener('click', ()=>hmiSaveLayout());
@@ -11386,6 +12015,7 @@ function _hmiLayoutObj(includeImage){
     imageName: hmiState.imgName, imageW: hmiState.imgW, imageH: hmiState.imgH,
     locked: hmiState.locked,
     indSize: hmiState.indSize,
+    labelMode: hmiState.labelMode || undefined,   // omitted = per-format default
     indicators: hmiState.indicators.map(i=>({
       id: i.id, tag: i.tag, prog: i.prog || null, instType: i.instType,
       rungRef: i.rungRef || null,
@@ -11397,7 +12027,8 @@ function _hmiLayoutObj(includeImage){
       w: (typeof t.w === 'number' ? Math.round(t.w*10)/10 : null),
       h: (typeof t.h === 'number' ? Math.round(t.h*10)/10 : null),
       text: t.text, fontSize: t.fontSize, color: t.color, bg: t.bg || null,
-      fmt: (t.fmt && t.fmt !== 'auto') ? t.fmt : undefined  // default source format is omitted
+      fmt: (t.fmt && t.fmt !== 'auto') ? t.fmt : undefined, // default source format is omitted
+      docs: t.docs ? true : undefined                       // manual search: opt-in per field
     })),
     // Alarm panels. Only the layout travels — activation stamps and scroll
     // offsets belong to the running session, not to the drawing.
@@ -11421,6 +12052,15 @@ function _hmiLayoutObj(includeImage){
       pts: l.pts.map(p=>({x: Math.round(p.x*10)/10, y: Math.round(p.y*10)/10}))
     }))
   };
+  // Project documentation — a relative path to the PDF manual, nothing else;
+  // the file itself stays in the tracer's Manuals\ folder and is never copied.
+  const _df = (hmiState.docs && hmiState.docs.formats || [])
+    .filter(f => f && f.tpl).map(f => ({id: f.id, name: f.name || '', tpl: f.tpl}));
+  if(hmiState.docs && (hmiState.docs.path || hmiState.docs.enabled || _df.length)){
+    o.docs = {enabled: !!hmiState.docs.enabled, path: hmiState.docs.path || '',
+              name: hmiState.docs.name || '', fmt: hmiState.docs.fmt || 'asis'};
+    if(_df.length) o.docs.formats = _df;   // user-written address templates
+  }
   if(includeImage && hmiState.imgDataURL) o.image = hmiState.imgDataURL;
   else if(hmiState.imgDataURL) o.imageOmitted = true;
   // v2: the .hmi.json keeps only REFERENCES to the PLC source files
@@ -11589,7 +12229,8 @@ function _hmiApplyLayout(obj){
       text: typeof t.text === 'string' ? t.text : '',
       fontSize: (typeof t.fontSize === 'number' && t.fontSize >= 4 && t.fontSize <= 200) ? t.fontSize : 14,
       color: t.color || '#d4e8f0', bg: t.bg || null,
-      fmt: HMI_FMTS.includes(String(t.fmt || '').toLowerCase()) ? String(t.fmt).toLowerCase() : 'auto'
+      fmt: HMI_FMTS.includes(String(t.fmt || '').toLowerCase()) ? String(t.fmt).toLowerCase() : 'auto',
+      docs: !!t.docs
     }));
   // Alarm panels — layouts saved before this feature simply have none
   hmiState.alarms = (Array.isArray(obj.alarms) ? obj.alarms : [])
@@ -11623,11 +12264,29 @@ function _hmiApplyLayout(obj){
       tag: l.tag || null, prog: l.prog || null, invert: !!l.invert, anim: !!l.anim
     }))
     .filter(l => l.pts.length >= 2);
+  // Project documentation — layouts saved before this feature simply have none
+  const _dc = (obj.docs && typeof obj.docs === 'object') ? obj.docs : {};
+  const _dfmts = (Array.isArray(_dc.formats) ? _dc.formats : [])
+    .filter(f => f && typeof f.tpl === 'string' && f.tpl.trim() && typeof f.id === 'string' && f.id)
+    .slice(0, HMI_DOC_MAX_FMT)
+    .map(f => ({id: f.id.slice(0, 64),
+                name: (typeof f.name === 'string' && f.name ? f.name : 'format').slice(0, 60),
+                tpl: f.tpl.slice(0, 80)}));
+  const _dfIds = HMI_DOC_FMTS.concat(_dfmts.map(f => f.id));
+  hmiState.docs = {
+    enabled: !!_dc.enabled,
+    path: typeof _dc.path === 'string' ? _dc.path.trim().replace(/\\/g, '/') : '',
+    name: typeof _dc.name === 'string' ? _dc.name : '',
+    fmt:  _dfIds.includes(String(_dc.fmt || '')) ? String(_dc.fmt) : 'asis',
+    formats: _dfmts
+  };
   // Loading always lands in run mode (Edit OFF), regardless of the mode the
   // layout was saved in — press EDIT to author.
   hmiState.locked = true;
   _hmiUpdateLockBtn();
   hmiState.indSize = (typeof obj.indSize === 'number' && obj.indSize >= 4 && obj.indSize <= 80) ? Math.round(obj.indSize) : 12;
+  hmiState.labelMode = ['off','name','io'].includes(obj.labelMode) ? obj.labelMode : null;
+  _hmiUpdateLabelBtn();
   _hmiUpdateSizeUI();
   if(obj.projectName && hmiState.projectName && obj.projectName !== hmiState.projectName)
     console.warn(`[HMI] layout was saved for project "${obj.projectName}", current project is "${hmiState.projectName}"`);

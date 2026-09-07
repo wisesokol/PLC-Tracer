@@ -195,7 +195,7 @@ const HDR_H = 22, RAIL_W = 8, COIL_ZONE = 70, WIRE_MARGIN = 28;
 const OUT_I = new Set(['OTE','OTL','OTU','OTD']);
 const IN_I  = new Set(['XIC','XIO','OSR','OSF','ONS']);
 const MATH_DEST_I = new Set(['MOV','ADD','SUB','MUL','DIV','MOD','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','SCP','SCL','TOD','FRN']);
-const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET']);
+const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI']);
 
 const L5X_INST_MAP = {'NE':'NEQ','EQ':'EQU','GT':'GRT','GE':'GEQ','LT':'LES','LE':'LEQ','MOVE':'MOV','LIMIT':'LIM'};
 const L5X_OUT_INST  = new Set(['OTE','OTL','OTU','OTD','OTDF']);
@@ -1088,13 +1088,21 @@ function parseRungTextTree(text){
   return tree||{type:'seq',children:[]};
 }
 
+// First operand naming a tag rather than a literal — EQU(1000,Step) used to
+// pin the constant onto the cell, which then resolved nothing. Mirrors tracer.
+function firstTagOperand(ops){
+  for(const op of ops){ if(op && /^[A-Za-z_]/.test(op) && !/^-?[\d.]+$/.test(op)) return op; }
+  return '';
+}
 function parseL5XRungTree(neutralText){
   if(!neutralText)return{type:'seq',children:[]};
   const tokens=tokeniseL5X(neutralText);let pos=0;
-  const L5X_SKIP=new Set(['NOP','AFI','END','ENDTASK']);
+  const L5X_SKIP=new Set(['NOP','END','ENDTASK']);
   function makeInstNode(tok){
     const inst=normalizeL5XInst(tok.inst);
     if(L5X_SKIP.has(inst))return null;
+    // AFI kills the rung — mirrors the tracer, which stopped dropping it.
+    if(inst==='AFI')return{type:'inst',inst:{t:'AFI',g:'__afi',r:'in',operands:[]}};
     const ops=tok.ops.map(s=>s.trim()).filter(s=>s&&s!=='?');
     let addr=ops[0]||'';
     if(inst==='JSR'){if(ops[0])return{type:'inst',inst:{t:'JSR',g:'__label:'+ops[0],r:'label',operands:ops,fileNum:ops[0]}};return null;}
@@ -1107,8 +1115,11 @@ function parseL5XRungTree(neutralText){
     else if(inst==='CPT'&&ops.length>=1)addr=ops[0];
     else if(inst==='FLL'&&ops.length>=2)addr=ops[1];
     else if((inst==='COP'||inst==='CPS')&&ops.length>=2)addr=ops[1];
+    // AVE destination is ops[2]; SRT sorts its array in place (mirrors tracer)
+    else if(inst==='AVE'&&ops.length>=3)addr=ops[2];
+    else if(inst==='SRT'&&ops.length>=1)addr=ops[0];
     else if(L5X_MATH_DEST.has(inst)&&ops.length>=2){const last=ops[ops.length-1];if(/^[A-Za-z_]/.test(last)&&!/^-?[\d.]+$/.test(last))addr=last;}
-    if(!addr||/^-?[\d.]+$/.test(addr))addr=ops[0]||'?';
+    if(!addr||/^-?[\d.]+$/.test(addr))addr=firstTagOperand(ops)||ops[0]||'?';
     return{type:'inst',inst:{t:inst,g:addr,r:parseAddrRoleL5X(inst),operands:ops}};
   }
   function parseSeq(){
@@ -1334,6 +1345,7 @@ function resolveLV(tagName){
 }
 
 function cellState(inst){
+  if(inst.t === 'AFI') return 'off';   // no tag to resolve; never conducts
   const lv = resolveLV(inst.g);
   if(!lv || lv.error) return null;
   const v = lv.value, t = inst.t;
@@ -1355,10 +1367,32 @@ function cellState(inst){
     return v?'on':'off';
   }
   if(['EQU','GRT','LES','GEQ','LEQ','NEQ','LIM'].includes(t)){
+    // LIM(LowLimit, Test, HighLimit): inst.g is Test (operands[1]), so the
+    // two-operand path below compared Test with itself and always returned null
+    // — a LIM cell never showed a state. Mirrors the tracer: true when
+    // Low <= Test <= High, inverted (Test <= High OR Test >= Low) when Low > High.
+    if(t==='LIM'&&inst.operands&&inst.operands.length>=3){
+      const numOf=a=>{
+        const litv=parsePlcLiteral(a);
+        if(litv!==null)return litv;
+        const l=resolveLV(a);
+        return l?parseFloat(l.value):NaN;
+      };
+      const lo=numOf(inst.operands[0]),te=numOf(inst.operands[1]),hi=numOf(inst.operands[2]);
+      if(isNaN(lo)||isNaN(te)||isNaN(hi))return null;
+      return (lo<=hi)?((te>=lo&&te<=hi)?'on':'off'):((te<=hi||te>=lo)?'on':'off');
+    }
     if(inst.operands&&inst.operands.length>=2){
-      const fv=parseFloat(v);
+      // Source A positionally from operands[0]: when it is a constant, inst.g
+      // holds the other operand and reading through it self-compares.
+      const srcA=inst.operands[0];
+      const litA=parsePlcLiteral(srcA);
+      let fv;
+      if(litA!==null) fv=litA;
+      else { const lvA=(srcA===inst.g)?lv:resolveLV(srcA); fv=lvA?parseFloat(lvA.value):NaN; }
       const srcB=inst.operands[1];const lvB=resolveLV(srcB);
-      const cmp=lvB?parseFloat(lvB.value):parseFloat(srcB);
+      const litB=parsePlcLiteral(srcB);
+      const cmp=lvB?parseFloat(lvB.value):(litB!==null?litB:parseFloat(srcB));
       if(!isNaN(cmp)&&!isNaN(fv)){
         if(t==='EQU')return fv===cmp?'on':'off';
         if(t==='NEQ')return fv!==cmp?'on':'off';

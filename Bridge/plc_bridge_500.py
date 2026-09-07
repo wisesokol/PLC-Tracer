@@ -12,13 +12,20 @@ Usage:
     python plc_bridge_500.py --ip 192.168.1.10 --type logix  # ControlLogix
     python plc_bridge_500.py --rslinx --ip 192.168.1.10
     python plc_bridge_500.py --config config500.json
+    python plc_bridge_500.py --plc Line1 --plc Line2    # several PLCs at once
+    python plc_bridge_500.py --all-plc                  # every saved device
+
+Several controllers:
+    Each PLC session gets its own WebSocket port (8765, 8767, 8768 …), printed
+    at start-up. Point one browser tab at each URL — the tabs then watch
+    different controllers at the same time.
 
 Requirements:
     pip install websockets aiohttp aiohttp-cors
     plctag.dll in Bridge/libplctag_2.6.16_windows_x64/
 """
 
-import asyncio, collections, json, logging, argparse, os, sys, time, zlib
+import asyncio, collections, json, logging, argparse, os, re, socket, sys, time, zlib
 from pathlib import Path
 
 # ── libplctag (SLC 5/05, MicroLogix via PCCC + ControlLogix/CompactLogix via CIP) ─────────────────────
@@ -143,7 +150,18 @@ except ImportError:
     WS_OK = False
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
-log = logging.getLogger("bridge500")
+LOG_ROOT = "bridge500"
+log = logging.getLogger(LOG_ROOT)
+
+
+def session_logger(slug: str) -> logging.Logger:
+    """Logger for one PLC session.
+
+    With several controllers polled at the same time an unlabelled log is
+    unreadable, so every session logs through a child of the root logger. The
+    handler that feeds the GUI turns that name back into a session tag.
+    """
+    return logging.getLogger(f"{LOG_ROOT}.{slug}") if slug else log
 
 # ── Save-path debug switch (toggled from the UI) ──────────────────────────────
 # When True, the bridge emits detailed traces around the "save online project"
@@ -167,9 +185,11 @@ class LogBuffer:
         self._buf = collections.deque(maxlen=capacity)
         self._seq = 0
 
-    def add(self, level: str, msg: str):
+    def add(self, level: str, msg: str, src: str = ""):
+        # `src` is the PLC session the line came from ("" = the bridge itself).
         self._seq += 1
-        self._buf.append({"seq": self._seq, "ts": time.time(), "level": level, "msg": msg})
+        self._buf.append({"seq": self._seq, "ts": time.time(), "level": level,
+                          "msg": msg, "src": src})
 
     def since(self, seq: int) -> list:
         return [r for r in self._buf if r["seq"] > seq]
@@ -181,8 +201,13 @@ class MemoryLogHandler(logging.Handler):
         self.setFormatter(logging.Formatter("%(message)s"))
 
     def emit(self, record):
-        try: self.buf.add(record.levelname, self.format(record))
-        except: pass
+        try:
+            name = record.name or ""
+            src = (name[len(LOG_ROOT) + 1:]
+                   if name.startswith(LOG_ROOT + ".") else "")
+            self.buf.add(record.levelname, self.format(record), src)
+        except Exception:
+            pass
 
 DEFAULT_WS   = 8765
 DEFAULT_HTTP = 8766
@@ -238,84 +263,278 @@ class Config:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Recorder state (single active session at a time)
-_rec: dict = {
-    'active':    False,
-    'tmp_path':  None,   # Path to _tmp file (header + all chunks so far)
-    'main_path': None,   # Path to final .ndrec file (mirror of tmp, rebuilt each chunk)
-    'header':    {},     # current header dict (tagIndex/graphSnap updated on each chunk)
-    'owner':     None,   # websocket that started it, so a dropped client closes it
-}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Saved devices — named connection presets shared by the GUI and the CLI
+# ─────────────────────────────────────────────────────────────────────────────
+DEV_FILE = Path(__file__).parent / "plc_bridge_devices.json"
+
+
+class DeviceStore:
+    """Named connection presets ("devices"), persisted next to the script.
+
+    File: {"version":1, "last":<name>, "devices":[{name, ip, slot, type,
+    interval, groups, port, rslinx}, ...]}.  A missing or broken file degrades
+    to an empty list — the panel must stay usable without it, this is a
+    convenience feature and never a precondition for connecting.
+
+    It lives here rather than in the GUI because the headless bridge starts the
+    same presets:  python plc_bridge_500.py --plc Line1 --plc Line2
+    """
+
+    def __init__(self, path: Path = None):
+        self.path    = Path(path) if path else DEV_FILE
+        self.devices = []      # list[dict], sorted by name
+        self.last    = ""      # name of the last selected device
+        self.load()
+
+    # ── persistence ───────────────────────────────────────────────────────────
+    def load(self):
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except Exception as e:
+            log.warning(f"Device list not loaded ({self.path.name}): {e}")
+            return
+        self.last = str(raw.get("last", "") or "")
+        for d in raw.get("devices", []):
+            try:
+                dev = self._norm(d)
+            except Exception:
+                continue          # skip a single malformed entry, keep the rest
+            if dev["name"] and dev["ip"]:
+                self.devices.append(dev)
+        self._sort()
+
+    def save(self) -> bool:
+        """Atomic write via staging file — same approach as the recorder."""
+        tmp = self.path.with_suffix(".tmp")
+        try:
+            tmp.write_text(
+                json.dumps({"version": 1, "last": self.last,
+                            "devices": self.devices},
+                           ensure_ascii=False, indent=2),
+                encoding="utf-8")
+            os.replace(tmp, self.path)
+            return True
+        except Exception as e:
+            log.error(f"Device list not saved ({self.path}): {e}")
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+            return False
+
+    # ── contents ──────────────────────────────────────────────────────────────
+    @staticmethod
+    def _norm(d: dict) -> dict:
+        return {
+            "name":     str(d.get("name", "")).strip(),
+            "ip":       str(d.get("ip", "")).strip(),
+            "slot":     int(d.get("slot", 0) or 0),
+            "type":     "logix" if str(d.get("type", "slc")).lower() == "logix" else "slc",
+            "interval": max(0.2, float(d.get("interval", 0.2) or 0.2)),
+            # Parallel CIP connections; 0 = auto. Presets written before this
+            # setting existed simply come back as auto.
+            "groups":   max(0, min(16, int(d.get("groups", 0) or 0))),
+            # WebSocket port this controller is served on. 0 = take the first
+            # free one at start; a fixed port is what a browser tab bookmarks,
+            # which is the whole point of running several PLCs at once.
+            "port":     max(0, min(65535, int(d.get("port", 0) or 0))),
+            "rslinx":   bool(d.get("rslinx", False)),
+        }
+
+    @staticmethod
+    def label(d: dict) -> str:
+        port = f"  ·  ws:{d['port']}" if d.get("port") else ""
+        return f"{d['name']}  ·  {d['ip']}:{d['slot']}  ·  {d['type']}{port}"
+
+    def _sort(self):
+        self.devices.sort(key=lambda d: d["name"].lower())
+
+    def find(self, name: str):
+        n = (name or "").strip().lower()
+        return next((d for d in self.devices if d["name"].lower() == n), None)
+
+    def put(self, dev: dict) -> bool:
+        """Add or overwrite by name (case-insensitive) and persist."""
+        dev = self._norm(dev)
+        old = self.find(dev["name"])
+        if old:
+            self.devices.remove(old)
+        self.devices.append(dev)
+        self._sort()
+        self.last = dev["name"]
+        return self.save()
+
+    def remove(self, name: str) -> bool:
+        d = self.find(name)
+        if not d:
+            return False
+        self.devices.remove(d)
+        if self.last.strip().lower() == name.strip().lower():
+            self.last = ""
+        return self.save()
+
+
+def device_to_config(dev: dict, base: "Config" = None) -> "Config":
+    """Turn a saved preset into the Config one PlcSession runs on."""
+    cfg = base or Config()
+    cfg.ip              = dev.get("ip", cfg.ip)
+    cfg.slot            = int(dev.get("slot", cfg.slot) or 0)
+    cfg.controller_type = dev.get("type", cfg.controller_type)
+    cfg.processor_type  = "Logix5000" if cfg.controller_type == "logix" else "SLC"
+    cfg.poll_interval   = max(0.2, float(dev.get("interval", cfg.poll_interval) or 0.2))
+    cfg.conn_groups     = int(dev.get("groups", cfg.conn_groups) or 0)
+    cfg.via_rslinx      = bool(dev.get("rslinx", False))
+    # 0 means "auto" here — SessionManager picks the first free port.
+    cfg.port_ws         = int(dev.get("port", 0) or 0)
+    if dev.get("records_dir"):
+        cfg.records_dir = dev["records_dir"]
+    return cfg
+
+
+# Recorder — one per PLC session
+#
+# This used to be a module-level singleton, which was right while the bridge
+# served exactly one controller. With several sessions running side by side it
+# destroys recordings: a browser tab pressing REC on PLC-B would silently close
+# PLC-A's session, because rec_start() always stopped "the" active one. Each
+# session now owns a Recorder; the module-level functions below still work and
+# operate on a default instance.
+
+
+def _slug(text: str) -> str:
+    """Session name reduced to something safe for file and logger names."""
+    out = re.sub(r"[^0-9A-Za-z_.\-]+", "_", str(text or "")).strip("_.")
+    return out[:32]
+
+
+class Recorder:
+    """Chunked .ndrec writer for one PLC session."""
+
+    def __init__(self, label: str = "", logger: logging.Logger | None = None):
+        # The label goes into the file name, so two controllers recorded in the
+        # same second cannot end up writing the same .ndrec.
+        self.label = _slug(label)
+        self.log = logger or log
+        # A dict, mutated in place and never rebound, so the module-level `_rec`
+        # alias below stays a live view of the default recorder's state.
+        self.st: dict = {
+            'active':    False,
+            'tmp_path':  None,   # Path to _tmp file (header + all chunks so far)
+            'main_path': None,   # Path to final .ndrec (mirror of tmp, rebuilt each chunk)
+            'header':    {},     # current header dict (tagIndex/graphSnap updated on each chunk)
+            'owner':     None,   # websocket that started it, so a dropped client closes it
+        }
+
+    @property
+    def active(self) -> bool:
+        return bool(self.st['active'])
+
+    @property
+    def file_name(self) -> str:
+        p = self.st['main_path']
+        return p.name if p else ""
+
+    def start(self, stamp: str, graph_snap: dict, tag_index: list,
+              records_dir, owner=None):
+        self.stop()  # stop any previous session of THIS recorder
+        records_dir = Path(records_dir)
+        records_dir.mkdir(parents=True, exist_ok=True)
+        tail = f"_{self.label}" if self.label else ""
+        st = self.st
+        st['tmp_path']  = records_dir / f"plc_rec_{stamp}{tail}_tmp.ndrec"
+        st['main_path'] = records_dir / f"plc_rec_{stamp}{tail}.ndrec"
+        st['header'] = {
+            "type": "header", "version": 2,
+            "createdAt": time.time(),
+            "tagIndex":  tag_index,
+            "graphSnap": graph_snap,
+        }
+        st['tmp_path'].write_text(
+            json.dumps(st['header'], ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        st['active'] = True
+        st['owner']  = owner
+        self.log.info(f"[REC] started → {st['main_path'].name}")
+
+    def chunk(self, tag_index: list, frames: list, graph_snap: dict | None = None):
+        st = self.st
+        if not st['active']:
+            return
+        # 1. Update tagIndex in header
+        st['header']['tagIndex'] = tag_index
+        # The tracer re-snapshots the scene when it captures its FIRST frame: REC
+        # is normally pressed before a tag is picked, so the snapshot taken at
+        # start() describes an empty canvas. Take the later one when it arrives.
+        if graph_snap:
+            st['header']['graphSnap'] = graph_snap
+        # 2. Read existing tmp lines (header + previous chunks)
+        existing = st['tmp_path'].read_text(encoding="utf-8").splitlines(keepends=True)
+        # 3. Replace header line and append new chunk
+        lines = [json.dumps(st['header'], ensure_ascii=False) + "\n"]
+        lines += existing[1:]  # previous chunks (skip old header)
+        if frames:
+            lines.append(json.dumps({"type": "chunk", "frames": frames},
+                                    ensure_ascii=False) + "\n")
+        content = "".join(lines)
+        # 4. Atomic write: staging file -> rename to main, then refresh tmp
+        staging = st['main_path'].with_suffix('.ndrec._writing')
+        staging.write_text(content, encoding="utf-8")
+        os.replace(str(staging), str(st['main_path']))  # atomic rename
+        st['tmp_path'].write_text(content, encoding="utf-8")
+        self.log.info(f"[REC] chunk flushed ({len(frames)} frames) → {st['main_path'].name}")
+
+    def stop(self):
+        st = self.st
+        if not st['active']:
+            return
+        # Remove the tmp scratch file; the main file is already up to date
+        if st['tmp_path'] and st['tmp_path'].exists():
+            st['tmp_path'].unlink()
+        self.log.info(f"[REC] stopped → {st['main_path'].name}")
+        st['active']    = False
+        st['tmp_path']  = None
+        st['main_path'] = None
+        st['header']    = {}
+        st['owner']     = None
+
+    def stop_if_owner(self, websocket):
+        """Close the session whose client just disappeared.
+
+        A browser that closes mid-recording never sends rec_stop, which used to
+        leave the session 'active' with its _tmp scratch file on disk forever.
+        The .ndrec itself is already complete — every chunk rewrites it — so
+        this only has to release the session.
+        """
+        if self.st['active'] and self.st['owner'] is websocket:
+            self.log.info("[REC] client disconnected — closing the recording session")
+            self.stop()
+
+
+# Default recorder used by the module-level API below. `_rec` stays a live view
+# of its state so existing callers keep reading the dict they always did.
+_rec_default = Recorder()
+_rec = _rec_default.st
+
 
 def rec_start(stamp: str, graph_snap: dict, tag_index: list, records_dir: Path,
               owner=None):
-    rec_stop()  # stop any previous session
-    records_dir.mkdir(parents=True, exist_ok=True)
-    _rec['tmp_path']  = records_dir / f"plc_rec_{stamp}_tmp.ndrec"
-    _rec['main_path'] = records_dir / f"plc_rec_{stamp}.ndrec"
-    _rec['header']    = {
-        "type": "header", "version": 2,
-        "createdAt": time.time(),
-        "tagIndex":  tag_index,
-        "graphSnap": graph_snap,
-    }
-    _rec['tmp_path'].write_text(
-        json.dumps(_rec['header'], ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    _rec['active'] = True
-    _rec['owner']  = owner
-    log.info(f"[REC] started → {_rec['main_path'].name}")
+    _rec_default.start(stamp, graph_snap, tag_index, records_dir, owner)
+
 
 def rec_chunk(tag_index: list, frames: list, graph_snap: dict | None = None):
-    if not _rec['active']:
-        return
-    # 1. Update tagIndex in header
-    _rec['header']['tagIndex'] = tag_index
-    # The tracer re-snapshots the scene when it captures its FIRST frame: REC is
-    # normally pressed before a tag is picked, so the snapshot taken at rec_start
-    # describes an empty canvas. Take the later one when it arrives.
-    if graph_snap:
-        _rec['header']['graphSnap'] = graph_snap
-    # 2. Read existing tmp lines (header + previous chunks)
-    existing = _rec['tmp_path'].read_text(encoding="utf-8").splitlines(keepends=True)
-    # 3. Replace header line and append new chunk
-    lines = [json.dumps(_rec['header'], ensure_ascii=False) + "\n"]
-    lines += existing[1:]  # previous chunks (skip old header)
-    if frames:
-        lines.append(json.dumps({"type": "chunk", "frames": frames}, ensure_ascii=False) + "\n")
-    content = "".join(lines)
-    # 4. Atomic write: tmp → staging file → rename to main, then update tmp
-    staging = _rec['main_path'].with_suffix('.ndrec._writing')
-    staging.write_text(content, encoding="utf-8")
-    os.replace(str(staging), str(_rec['main_path']))  # atomic rename
-    _rec['tmp_path'].write_text(content, encoding="utf-8")
-    log.info(f"[REC] chunk flushed ({len(frames)} frames) → {_rec['main_path'].name}")
+    _rec_default.chunk(tag_index, frames, graph_snap)
+
 
 def rec_stop():
-    if not _rec['active']:
-        return
-    # Remove tmp scratch file, main file is already up to date
-    if _rec['tmp_path'] and _rec['tmp_path'].exists():
-        _rec['tmp_path'].unlink()
-    log.info(f"[REC] stopped → {_rec['main_path'].name}")
-    _rec['active']    = False
-    _rec['tmp_path']  = None
-    _rec['main_path'] = None
-    _rec['header']    = {}
-    _rec['owner']     = None
+    _rec_default.stop()
 
 
 def rec_stop_if_owner(websocket):
-    """Close the session whose client just disappeared.
-
-    A browser that closes mid-recording never sends rec_stop, which used to
-    leave the session 'active' with its _tmp scratch file on disk forever. The
-    .ndrec itself is already complete — every chunk rewrites it — so this only
-    has to release the session.
-    """
-    if _rec['active'] and _rec['owner'] is websocket:
-        log.info("[REC] client disconnected — closing the recording session")
-        rec_stop()
+    _rec_default.stop_if_owner(websocket)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1044,8 +1263,11 @@ class LibplctagConnection:
     beating pylogix batch throughput for large watch lists.
     """
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, logger: logging.Logger | None = None):
         self.cfg = cfg
+        # Session logger: with several controllers polled at once every line has
+        # to say which one it came from.
+        self.log = logger or log
         self.connected = False
         self.auto_reconnect = True
         self.controller_info = {}
@@ -1099,7 +1321,7 @@ class LibplctagConnection:
         cycle from 2500 to 2000 ms, 4 produced a wall of timeouts.
         """
         if self.cfg.controller_type != 'logix' and self._effective_groups() > 2:
-            log.warning(
+            self.log.warning(
                 f"{self._effective_groups()} connections on a PCCC controller: "
                 f"an SLC/MicroLogix serves requests one at a time, so more than 2 "
                 f"usually just adds timeouts. Use block reads (on by default) to "
@@ -1132,7 +1354,7 @@ class LibplctagConnection:
         self.cfg.conn_groups = n
         cnt = len(self._handles)
         self._destroy_all()
-        log.info(f"CIP connections → {self._effective_groups()}"
+        self.log.info(f"CIP connections → {self._effective_groups()}"
                  + (" (auto)" if n == 0 else "")
                  + (f"; {cnt} handle(s) dropped for rebuild" if cnt else ""))
         self._warn_if_slc_overparallel()
@@ -1159,7 +1381,7 @@ class LibplctagConnection:
                 if struct_key in self._handles:
                     self._drop_handle(struct_key)
         if changed:
-            log.info(f"Received {changed} tag type hint(s) from tracer")
+            self.log.info(f"Received {changed} tag type hint(s) from tracer")
 
     # ── poll interval / read cache -----------------------------------------
     async def update_poll_interval(self, interval: float):
@@ -1191,13 +1413,13 @@ class LibplctagConnection:
                     failed.append(name)
             for name in failed:
                 self._drop_handle(name)
-            log.info(f"poll_interval={interval}s → read_cache_ms={cache_ms} "
+            self.log.info(f"poll_interval={interval}s → read_cache_ms={cache_ms} "
                      f"applied to {len(self._handles)} handle(s)"
                      + (f", {len(failed)} dropped for rebuild" if failed else ""))
         else:
             n = len(self._handles)
             self._destroy_all()
-            log.info(f"poll_interval={interval}s → DLL lacks set_int_attribute; "
+            self.log.info(f"poll_interval={interval}s → DLL lacks set_int_attribute; "
                      f"dropped {n} handle(s) to rebuild with read_cache_ms={cache_ms}")
 
     # ── lifecycle ---------------------------------------------------------
@@ -1222,7 +1444,7 @@ class LibplctagConnection:
                 err = _libplctag.plc_tag_decode_error(tag)
                 self.error = f"libplctag create failed: {err.decode() if err else tag}"
                 self.connected = False
-                log.error(f"libplctag connect error ({probe_label}): {self.error}")
+                self.log.error(f"libplctag connect error ({probe_label}): {self.error}")
                 return False
             rc = _libplctag.plc_tag_read(tag, _LIBPLCTAG_TIMEOUT)
             _libplctag.plc_tag_destroy(tag)
@@ -1230,7 +1452,7 @@ class LibplctagConnection:
                 err = _libplctag.plc_tag_decode_error(rc)
                 self.error = f"libplctag probe read failed: {err.decode() if err else rc}"
                 self.connected = False
-                log.error(f"libplctag connect probe error ({probe_label}): {self.error}")
+                self.log.error(f"libplctag connect probe error ({probe_label}): {self.error}")
                 return False
             self.connected = True
             self.error = ""
@@ -1242,7 +1464,7 @@ class LibplctagConnection:
                 "type": self.cfg.controller_type,
                 "backend": "libplctag",
             }
-            log.info(f"✓ Connected: {self.controller_info['name']} "
+            self.log.info(f"✓ Connected: {self.controller_info['name']} "
                      f"· {self._effective_groups()} CIP connection(s)"
                      + ("" if self.cfg.controller_type == 'logix'
                         else f" · block reads "
@@ -1252,7 +1474,7 @@ class LibplctagConnection:
         except Exception as e:
             self.connected = False
             self.error = str(e)
-            log.error(f"libplctag connect error: {e}")
+            self.log.error(f"libplctag connect error: {e}")
             return False
 
     def _destroy_all(self):
@@ -1373,7 +1595,7 @@ class LibplctagConnection:
             n_uniq_req = len(set(tag_names))
             n_words = len(set(w for w, _ in bit_map.values()))
             n_structs = len(struct_base)
-            log.info(
+            self.log.info(
                 f"[DBG-SAVE] read plan: requested={n_req} "
                 f"(unique={n_uniq_req}, dup_in_request={n_req - n_uniq_req}) → "
                 f"physical_reads={len(phys_names)} "
@@ -1433,12 +1655,12 @@ class LibplctagConnection:
                         cap = self._slc_block_cap.get(key, _SLC_BLOCK_BYTES) // 2
                         if cap >= _SLC_BLOCK_BYTES_MIN:
                             self._slc_block_cap[key] = cap
-                            log.warning(
+                            self.log.warning(
                                 f"SLC block read refused on {parsed[0]}{parsed[1]} "
                                 f"({msg}) — retrying with {cap}-byte blocks")
                         elif key not in self._slc_no_block:
                             self._slc_no_block.add(key)
-                            log.warning(
+                            self.log.warning(
                                 f"SLC block read failed on {parsed[0]}{parsed[1]} "
                                 f"({msg}) — falling back to one request per address "
                                 f"for this file")
@@ -1584,7 +1806,7 @@ class LibplctagConnection:
                 self._err_seen[n] = msg
             if fresh:
                 more = f" (+{len(fresh) - 8} more)" if len(fresh) > 8 else ""
-                log.warning(f"read failed for {len(fresh)} tag(s): "
+                self.log.warning(f"read failed for {len(fresh)} tag(s): "
                             f"{'; '.join(fresh[:8])}{more}")
         for n in phys_ok:
             self._err_seen.pop(n, None)
@@ -1596,7 +1818,7 @@ class LibplctagConnection:
             dt_ms = (time.monotonic() - _dbg_t0) * 1000.0
             hits = self._dbg_handle_hits - _dbg_hits0
             creates = self._dbg_handle_creates - _dbg_creates0
-            log.info(
+            self.log.info(
                 f"[DBG-SAVE] read done: {len(phys_names)} physical reads in "
                 f"{dt_ms:.0f} ms | handle_cache reuse={hits} new={creates} "
                 f"(total cached={len(self._handles)}) | "
@@ -1859,16 +2081,17 @@ class LibplctagConnection:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def create_connection(cfg: Config):
+def create_connection(cfg: Config, logger: logging.Logger | None = None):
     """Factory: single libplctag backend for all supported controller families."""
     if not LIBPLCTAG_OK:
         raise RuntimeError("libplctag is not available — place plctag.dll in "
                            "Bridge/libplctag_2.6.16_windows_x64/")
+    lg = logger or log
     if cfg.controller_type == 'logix':
-        log.info("Backend: libplctag (CIP / ControlLogix)")
+        lg.info("Backend: libplctag (CIP / ControlLogix)")
     else:
-        log.info("Backend: libplctag (PCCC / SLC / MicroLogix)")
-    return LibplctagConnection(cfg)
+        lg.info("Backend: libplctag (PCCC / SLC / MicroLogix)")
+    return LibplctagConnection(cfg, lg)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1890,9 +2113,11 @@ _READ_BUDGET_MAX = 10.0
 
 
 class TagPoller:
-    def __init__(self, conn: LibplctagConnection, cfg: Config):
+    def __init__(self, conn: LibplctagConnection, cfg: Config,
+                 logger: logging.Logger | None = None):
         self.conn = conn
         self.cfg  = cfg
+        self.log  = logger or log
         self.watched = set(cfg.watched_tags)
         self.values  = {}
         self.subscribers = set()
@@ -1917,13 +2142,13 @@ class TagPoller:
 
     async def run(self):
         self._running = True
-        log.info("Poller started")
+        self.log.info("Poller started")
         while self._running:
             if not self.conn.connected:
                 if not self.conn.auto_reconnect:
                     await asyncio.sleep(1)
                     continue
-                log.info(f"Reconnecting in {RECONNECT}s…")
+                self.log.info(f"Reconnecting in {RECONNECT}s…")
                 await asyncio.sleep(RECONNECT)
                 await self.conn.connect()
                 continue
@@ -1971,7 +2196,7 @@ class TagPoller:
             if now - self._overrun_logged >= 30.0:
                 self._overrun_logged = now
                 reads = getattr(self.conn, 'last_phys_reads', 0)
-                log.warning(
+                self.log.warning(
                     f"poll cycle {self.last_cycle_ms:.0f} ms for {n_tags} tag(s) "
                     f"in {reads} request(s)"
                     + (f", {self.last_timeouts} timed out" if self.last_timeouts else "")
@@ -1989,15 +2214,251 @@ class TagPoller:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-async def ws_handler(websocket, poller, conn, cfg):
-    log.info(f"WS client: {websocket.remote_address}")
+# One PLC = one session = one WebSocket port
+# ─────────────────────────────────────────────────────────────────────────────
+def _port_free(port: int) -> bool:
+    """True when nothing on this machine currently holds the port."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+            sk.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+
+
+class PlcSession:
+    """One controller end to end: config, connection, poller, recorder, port.
+
+    Sessions are fully independent — their own libplctag handles, watch set,
+    recording and WebSocket endpoint — so a browser tab talks to exactly one
+    controller and a PLC that goes down cannot disturb the others.
+    """
+
+    def __init__(self, name: str, cfg: Config):
+        self.name = (name or cfg.ip or "plc").strip()
+        self.slug = _slug(self.name) or "plc"
+        self.cfg  = cfg
+        self.log  = session_logger(self.slug)
+        self.recorder = Recorder(self.slug, self.log)
+        self.conn    = None
+        self.poller  = None
+        self.running = False
+        self.started_at = 0.0
+        self._ws_srv = None
+        self._ptask  = None
+
+    @property
+    def ws_url(self) -> str:
+        return f"ws://localhost:{self.cfg.port_ws}"
+
+    async def start(self):
+        """Bring the session up. Raises if the WS port cannot be taken."""
+        if self.running:
+            return False
+        self.conn   = create_connection(self.cfg, self.log)
+        self.poller = TagPoller(self.conn, self.cfg, self.log)
+        if WS_OK and websockets:
+            # Bind the port BEFORE touching the PLC: a port clash has to fail
+            # fast and leave nothing running, while a controller that is merely
+            # unreachable is normal — the poller keeps retrying in background.
+            self._ws_srv = await websockets.serve(
+                lambda ws: ws_handler(ws, self), "0.0.0.0", self.cfg.port_ws)
+            self.log.info(f"WebSocket → {self.ws_url}")
+        self.running    = True
+        self.started_at = time.time()
+        await self.conn.connect()
+        if self.cfg.slc_path:
+            try:
+                tags = load_tags_from_slc(self.cfg.slc_path)
+                self.poller.watch(tags)
+                self.log.info(f"Loaded {len(tags)} addresses from SLC file")
+            except Exception as e:
+                self.log.warning(f"SLC file load failed: {e}")
+        self._ptask = asyncio.create_task(self.poller.run())
+        return True
+
+    async def stop(self):
+        self.running = False
+        if self.poller:
+            self.poller.stop()
+        if self._ptask:
+            self._ptask.cancel()
+            try:
+                await self._ptask
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._ptask = None
+        if self._ws_srv:
+            self._ws_srv.close()
+            try:
+                await self._ws_srv.wait_closed()
+            except Exception:
+                pass
+            self._ws_srv = None
+        # A recording belongs to the session, not to the bridge: closing the
+        # session must close its .ndrec, and only its own.
+        self.recorder.stop()
+        if self.conn:
+            await self.conn.disconnect()
+        self.log.info("session stopped")
+
+    async def reconnect(self) -> bool:
+        if not self.conn:
+            return False
+        await self.conn.disconnect()
+        # Recreate the connection object — the controller family may have
+        # changed (SLC <-> Logix) and handles carry their type from creation.
+        self.conn = create_connection(self.cfg, self.log)
+        if self.poller:
+            self.poller.conn = self.conn
+        return await self.conn.connect()
+
+    def status(self) -> dict:
+        """Everything the GUI and /sessions need, in one snapshot."""
+        c, p = self.conn, self.poller
+        return {
+            "name":       self.name,
+            "slug":       self.slug,
+            "ip":         self.cfg.ip,
+            "slot":       self.cfg.slot,
+            "type":       self.cfg.controller_type,
+            "ws_port":    self.cfg.port_ws,
+            "ws_url":     self.ws_url,
+            "running":    self.running,
+            "connected":  bool(c and c.connected),
+            "error":      (c.error if c else ""),
+            "controller": (c.controller_info if c else {}),
+            "watching":   (len(p.watched) if p else 0),
+            "clients":    (len(p.subscribers) if p else 0),
+            "cycle_ms":   (p.last_cycle_ms if p else 0.0),
+            "avg_ms":     (p.avg_cycle_ms if p else 0.0),
+            "timeouts":   (p.last_timeouts if p else 0),
+            "interval":   self.cfg.poll_interval,
+            "groups":     (c._effective_groups() if c else 0),
+            "reads":      (getattr(c, "last_phys_reads", 0) if c else 0),
+            "bytes":      (getattr(c, "last_phys_bytes", 0) if c else 0),
+            "rslinx":     bool(self.cfg.via_rslinx),
+            "recording":  self.recorder.active,
+            "rec_file":   self.recorder.file_name,
+            "started_at": self.started_at,
+        }
+
+
+class SessionManager:
+    """Every PLC session running in this process, keyed by name."""
+
+    def __init__(self, base_port: int = DEFAULT_WS, reserved=(DEFAULT_HTTP,)):
+        self.sessions: dict = {}          # name → PlcSession (insertion ordered)
+        self.base_port = base_port
+        # Ports the bridge itself needs; never handed to a PLC session.
+        self.reserved = set(reserved)
+
+    # ── lookup ────────────────────────────────────────────────────────────────
+    def __len__(self):
+        return len(self.sessions)
+
+    def get(self, name: str):
+        if not name:
+            return None
+        s = self.sessions.get(name)
+        if s:
+            return s
+        n = name.strip().lower()
+        return next((v for k, v in self.sessions.items() if k.lower() == n), None)
+
+    def default(self):
+        """The session an unqualified request means: the only one running."""
+        return next(iter(self.sessions.values()), None)
+
+    def names(self) -> list:
+        return list(self.sessions.keys())
+
+    def status_all(self) -> list:
+        return [s.status() for s in self.sessions.values()]
+
+    # ── ports ─────────────────────────────────────────────────────────────────
+    def used_ports(self) -> set:
+        return {s.cfg.port_ws for s in self.sessions.values()}
+
+    def alloc_port(self, preferred: int = 0) -> int:
+        """Preferred port when it is genuinely free, otherwise the next one.
+
+        Falling back instead of failing is deliberate: the point of the preset
+        list is that starting three saved controllers must just work, even when
+        two of them were saved with the same (default) port.
+        """
+        used = self.used_ports()
+        if preferred and preferred not in used and _port_free(preferred):
+            return preferred
+        port = self.base_port
+        while port < self.base_port + 200:
+            if port not in used and port not in self.reserved and _port_free(port):
+                return port
+            port += 1
+        raise RuntimeError("no free WebSocket port in "
+                           f"{self.base_port}..{self.base_port + 200}")
+
+    # ── lifecycle ─────────────────────────────────────────────────────────────
+    async def start(self, name: str, cfg: Config) -> PlcSession:
+        name = (name or cfg.ip or "plc").strip()
+        if self.get(name):
+            raise ValueError(f"session “{name}” is already running")
+        want = int(getattr(cfg, "port_ws", 0) or 0)
+        port = self.alloc_port(want)
+        if want and port != want:
+            log.warning(f"[{name}] WS port {want} is taken — using {port}")
+        cfg.port_ws = port
+        sess = PlcSession(name, cfg)
+        self.sessions[sess.name] = sess
+        try:
+            await sess.start()
+        except Exception:
+            self.sessions.pop(sess.name, None)
+            raise
+        return sess
+
+    async def stop(self, name: str) -> bool:
+        sess = self.get(name)
+        if not sess:
+            return False
+        self.sessions.pop(sess.name, None)
+        await sess.stop()
+        return True
+
+    async def stop_all(self):
+        for sess in list(self.sessions.values()):
+            try:
+                await sess.stop()
+            except Exception as e:
+                log.warning(f"[{sess.name}] stop failed: {e}")
+        self.sessions.clear()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+async def ws_handler(websocket, session: PlcSession):
+    """Serve one browser tab.
+
+    Every command is scoped to `session`, so tabs pointed at different ports
+    drive different controllers: separate watch sets, separate values, separate
+    recording. `session.conn` is read on each use rather than captured once,
+    because a reconnect swaps the connection object under a live socket.
+    """
+    poller = session.poller
+    cfg    = session.cfg
+    rec    = session.recorder
+    slog   = session.log
+    slog.info(f"WS client: {websocket.remote_address}")
     poller.subscribe(websocket)
     try:
         await websocket.send(json.dumps({
             "type": "hello",
-            "controller": conn.controller_info,
-            "connected": conn.connected,
-            "error": conn.error,
+            # Which controller this port serves — lets a tab show what it is
+            # actually looking at when several bridges are up.
+            "plc": session.name,
+            "wsPort": cfg.port_ws,
+            "controller": session.conn.controller_info,
+            "connected": session.conn.connected,
+            "error": session.conn.error,
             "watching": list(poller.watched),
             "values": poller.values,
         }))
@@ -2016,17 +2477,17 @@ async def ws_handler(websocket, poller, conn, cfg):
                     poller.watched = new_tags
                     # Accept optional L5X type hints for Logix tag sizing
                     type_map = msg.get("tagTypes") or {}
-                    if type_map and hasattr(conn, "set_tag_types"):
+                    if type_map and hasattr(session.conn, "set_tag_types"):
                         try:
-                            conn.set_tag_types(type_map)
+                            session.conn.set_tag_types(type_map)
                         except Exception as e:
-                            log.warning(f"set_tag_types failed: {e}")
+                            slog.warning(f"set_tag_types failed: {e}")
                     if removed or added:
-                        log.info(f"watch_only: +{len(added)} -{len(removed)} tags, total={len(new_tags)}")
+                        slog.info(f"watch_only: +{len(added)} -{len(removed)} tags, total={len(new_tags)}")
                     if DEBUG_SAVE:
                         sample_add = list(added)[:5]
                         sample_rem = list(removed)[:5]
-                        log.info(
+                        slog.info(
                             f"[DBG-SAVE] watch_only: payload={len(new_tags)} tagTypes={len(type_map)} "
                             f"added_sample={sample_add} removed_sample={sample_rem}")
                     await websocket.send(json.dumps({"type":"ack","cmd":"watch_only","watching":list(poller.watched)}))
@@ -2035,7 +2496,7 @@ async def ws_handler(websocket, poller, conn, cfg):
                         current_vals = {t: poller.values[t] for t in new_tags if t in poller.values}
                         if current_vals:
                             if DEBUG_SAVE:
-                                log.info(
+                                slog.info(
                                     f"[DBG-SAVE] watch_only → pushing cached current_vals: "
                                     f"{len(current_vals)} keys "
                                     f"sample={list(current_vals.items())[:3]}")
@@ -2054,7 +2515,7 @@ async def ws_handler(websocket, poller, conn, cfg):
                         # connection lock and shares the handle cache, so the two
                         # paths can never issue concurrent reads on one handle.
                         overlap = sum(1 for t in req_tags if t in poller.watched)
-                        log.info(
+                        slog.info(
                             f"[DBG-SAVE] read_now request: count={len(req_tags)} "
                             f"unique={len(set(req_tags))} "
                             f"program_scope={len(prog_tags)} "
@@ -2062,7 +2523,7 @@ async def ws_handler(websocket, poller, conn, cfg):
                             f"sample_in={req_tags[:5]} "
                             f"sample_prog={prog_tags[:5]} "
                             f"sample_tail={req_tags[-5:]}")
-                    vals = await conn.read_tags(req_tags)
+                    vals = await session.conn.read_tags(req_tags)
                     if DEBUG_SAVE:
                         missing = [t for t in req_tags if t not in vals]
                         errors  = [(k, v.get("error")) for k, v in vals.items() if v.get("error")]
@@ -2070,37 +2531,37 @@ async def ws_handler(websocket, poller, conn, cfg):
                                      for k in list(vals.keys())[:5]]
                         prog_vals = [(k, vals[k].get("value"), vals[k].get("type"), vals[k].get("error"))
                                      for k in vals if k.startswith("Program:")]
-                        log.info(
+                        slog.info(
                             f"[DBG-SAVE] read_now result: got={len(vals)}/{len(req_tags)} "
                             f"missing={len(missing)} errors={len(errors)}")
                         if sample_ok:
-                            log.info(f"[DBG-SAVE] read_now sample_ok={sample_ok}")
+                            slog.info(f"[DBG-SAVE] read_now sample_ok={sample_ok}")
                         if prog_vals:
-                            log.info(f"[DBG-SAVE] read_now program_scope_vals={prog_vals}")
+                            slog.info(f"[DBG-SAVE] read_now program_scope_vals={prog_vals}")
                         if errors:
-                            log.info(f"[DBG-SAVE] read_now errors_sample={errors[:5]}")
+                            slog.info(f"[DBG-SAVE] read_now errors_sample={errors[:5]}")
                         if missing:
-                            log.info(f"[DBG-SAVE] read_now missing_sample={missing[:5]}")
+                            slog.info(f"[DBG-SAVE] read_now missing_sample={missing[:5]}")
                     poller.values.update(vals)
                     await websocket.send(json.dumps({"type":"values","data":vals}))
                 elif cmd == "set_interval":
                     iv = max(0.2, min(60, float(msg.get("interval", 0.2))))
-                    poller.cfg.poll_interval = iv
-                    await conn.update_poll_interval(iv)
+                    cfg.poll_interval = iv
+                    await session.conn.update_poll_interval(iv)
                 elif cmd == "ping":
                     await websocket.send(json.dumps({"type":"pong","ts":time.time()}))
                 elif cmd == "get_status":
                     await websocket.send(json.dumps({
-                        "type":"status","connected":conn.connected,
-                        "error":conn.error,"controller":conn.controller_info,
+                        "type":"status","connected":session.conn.connected,
+                        "error":session.conn.error,"controller":session.conn.controller_info,
+                        "plc":session.name,
                         "watching":list(poller.watched),
                     }))
                 elif cmd == "reconnect":
-                    await conn.disconnect()
-                    ok = await conn.connect()
+                    ok = await session.reconnect()
                     await websocket.send(json.dumps({"type":"ack","cmd":"reconnect","ok":ok}))
                 elif cmd == "rec_start":
-                    rec_start(
+                    rec.start(
                         msg.get("stamp", ""),
                         msg.get("graphSnap", {}),
                         msg.get("tagIndex", []),
@@ -2109,50 +2570,79 @@ async def ws_handler(websocket, poller, conn, cfg):
                     )
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_start","ok":True}))
                 elif cmd == "rec_chunk":
-                    rec_chunk(msg.get("tagIndex", []), msg.get("frames", []),
+                    rec.chunk(msg.get("tagIndex", []), msg.get("frames", []),
                               msg.get("graphSnap"))
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_chunk","ok":True}))
                 elif cmd == "rec_stop":
-                    rec_stop()
+                    rec.stop()
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_stop","ok":True}))
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({"type":"error","msg":"invalid JSON"}))
     except Exception as e:
-        log.info(f"WS disconnected: {e}")
+        slog.info(f"WS disconnected: {e}")
     finally:
         poller.unsubscribe(websocket)
-        rec_stop_if_owner(websocket)
+        rec.stop_if_owner(websocket)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def build_http_app(conn, poller, cfg, log_buf):
+def build_http_app(manager: SessionManager, log_buf):
+    """REST API over every running PLC session.
+
+    Each route takes an optional ?plc=<name> selector. Without it the request
+    goes to the first running session, so a client written against the
+    single-PLC API keeps working unchanged.
+    """
     app = web.Application()
     cors = aiohttp_cors.setup(app, defaults={
         "*": aiohttp_cors.ResourceOptions(allow_credentials=True, expose_headers="*", allow_headers="*", allow_methods="*")
     })
+
+    def pick(req):
+        name = req.rel_url.query.get("plc") or req.rel_url.query.get("session") or ""
+        s = manager.get(name) if name else manager.default()
+        if s is None:
+            raise web.HTTPNotFound(
+                text=json.dumps({"error": f"no such PLC session: {name or '(none running)'}",
+                                 "sessions": manager.names()}),
+                content_type="application/json")
+        return s
+
+    async def h_sessions(req):
+        return web.json_response({"sessions": manager.status_all()})
     async def h_status(req):
-        return web.json_response({"connected":conn.connected,"error":conn.error,"controller":conn.controller_info,"watching":list(poller.watched),"poll_interval":cfg.poll_interval,"ws_port":cfg.port_ws,"auto_reconnect":conn.auto_reconnect})
+        s = pick(req)
+        return web.json_response({"plc":s.name,"connected":s.conn.connected,"error":s.conn.error,
+                                  "controller":s.conn.controller_info,"watching":list(s.poller.watched),
+                                  "poll_interval":s.cfg.poll_interval,"ws_port":s.cfg.port_ws,
+                                  "auto_reconnect":s.conn.auto_reconnect})
     async def h_read(req):
+        s = pick(req)
         names=[t.strip() for t in req.rel_url.query.get("tags","").split(",") if t.strip()]
         if not names: return web.json_response({"error":"no tags"},status=400)
-        vals = await conn.read_tags(names); poller.values.update(vals)
+        vals = await s.conn.read_tags(names); s.poller.values.update(vals)
         return web.json_response(vals)
     async def h_watch(req):
-        data=await req.json(); poller.watch(data.get("tags",[]))
-        return web.json_response({"watching":list(poller.watched)})
+        s = pick(req)
+        data=await req.json(); s.poller.watch(data.get("tags",[]))
+        return web.json_response({"watching":list(s.poller.watched)})
     async def h_values(req):
-        return web.json_response(poller.values)
+        return web.json_response(pick(req).poller.values)
     async def h_reconnect(req):
-        conn.auto_reconnect=True; await conn.disconnect(); ok=await conn.connect()
-        return web.json_response({"ok":ok,"error":conn.error})
+        s = pick(req)
+        s.conn.auto_reconnect=True; ok=await s.reconnect()
+        return web.json_response({"ok":ok,"error":s.conn.error})
     async def h_disconnect(req):
-        conn.auto_reconnect=False; await conn.disconnect()
-        log.info("Disconnected by UI request"); return web.json_response({"ok":True})
+        s = pick(req)
+        s.conn.auto_reconnect=False; await s.conn.disconnect()
+        s.log.info("Disconnected by UI request"); return web.json_response({"ok":True})
     async def h_tags(req):
-        tags=await conn.get_tag_list(); return web.json_response({"tags":tags})
+        tags=await pick(req).conn.get_tag_list(); return web.json_response({"tags":tags})
     async def h_config_get(req):
-        return web.json_response({"ip":cfg.ip,"slot":cfg.slot,"controller_type":cfg.controller_type,"processor_type":cfg.processor_type,"poll_interval":cfg.poll_interval,"via_rslinx":cfg.via_rslinx,"port_ws":cfg.port_ws,"port_http":cfg.port_http})
+        s = pick(req); cfg = s.cfg
+        return web.json_response({"plc":s.name,"ip":cfg.ip,"slot":cfg.slot,"controller_type":cfg.controller_type,"processor_type":cfg.processor_type,"poll_interval":cfg.poll_interval,"via_rslinx":cfg.via_rslinx,"port_ws":cfg.port_ws})
     async def h_config_post(req):
+        s = pick(req); cfg = s.cfg
         data=await req.json(); need_reconnect=False
         for key,cast in (("ip",str),("slot",int),("via_rslinx",bool)):
             if key in data:
@@ -2163,15 +2653,16 @@ def build_http_app(conn, poller, cfg, log_buf):
             cfg.processor_type="Logix5000" if cfg.controller_type=="logix" else cfg.processor_type
             need_reconnect=True
         if "poll_interval" in data:
-            cfg.poll_interval=max(0.2,min(60.0,float(data["poll_interval"]))); poller.cfg.poll_interval=cfg.poll_interval
-            await conn.update_poll_interval(cfg.poll_interval)
+            cfg.poll_interval=max(0.2,min(60.0,float(data["poll_interval"])))
+            await s.conn.update_poll_interval(cfg.poll_interval)
         if need_reconnect:
-            conn.auto_reconnect=True; await conn.disconnect(); ok=await conn.connect()
-            return web.json_response({"ok":ok,"reconnected":True,"error":conn.error})
+            s.conn.auto_reconnect=True; ok=await s.reconnect()
+            return web.json_response({"ok":ok,"reconnected":True,"error":s.conn.error})
         return web.json_response({"ok":True,"reconnected":False})
     async def h_logs(req):
         since=int(req.rel_url.query.get("since",0)); return web.json_response(log_buf.since(since))
     for r in [
+        app.router.add_get("/sessions",h_sessions),
         app.router.add_get("/status",h_status),
         app.router.add_get("/read",h_read),
         app.router.add_post("/watch",h_watch),
@@ -2235,48 +2726,46 @@ def load_tags_from_slc(path:str)->list:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-async def main(cfg):
+async def main(specs, port_http: int = DEFAULT_HTTP):
+    """Run every requested PLC session side by side.
+
+    `specs` is a list of (name, Config). Each session takes its own WebSocket
+    port, which is the address a browser tab connects to, so several tabs can
+    watch several controllers at the same time. The REST API is shared and
+    selects the session with ?plc=<name>.
+    """
     log_buf = LogBuffer()
     logging.getLogger().addHandler(MemoryLogHandler(log_buf))
-    conn   = create_connection(cfg)
-    poller = TagPoller(conn, cfg)
-    await conn.connect()
-    if not conn.connected:
-        log.warning("Initial connection failed — retrying in background")
-    if cfg.slc_path:
+    mgr = SessionManager()
+    for name, cfg in specs:
         try:
-            tags=load_tags_from_slc(cfg.slc_path)
-            poller.watch(tags)
-            log.info(f"Loaded {len(tags)} addresses from SLC file")
+            await mgr.start(name, cfg)
         except Exception as e:
-            log.warning(f"SLC file load failed: {e}")
-    poller_task=asyncio.create_task(poller.run())
-    ws_server=None
-    if WS_OK:
-        ws_server=await websockets.serve(
-            lambda ws:ws_handler(ws,poller,conn,cfg),"0.0.0.0",cfg.port_ws)
-        log.info(f"WebSocket → ws://localhost:{cfg.port_ws}")
+            log.error(f"[{name}] not started: {e}")
+    if not len(mgr):
+        log.error("No PLC session started — nothing to do.")
+        return
     http_runner=None
     if AIOHTTP_OK:
-        app=build_http_app(conn,poller,cfg,log_buf)
+        app=build_http_app(mgr,log_buf)
         runner=web.AppRunner(app)
         await runner.setup()
-        await web.TCPSite(runner,"0.0.0.0",cfg.port_http).start()
+        await web.TCPSite(runner,"0.0.0.0",port_http).start()
         http_runner=runner
-        log.info(f"HTTP REST  → http://localhost:{cfg.port_http}")
+        log.info(f"HTTP REST  → http://localhost:{port_http}")
     print(f"\n{'-'*55}")
-    print(f"  Bridge started. Open plc-tracer-500.html")
-    print(f"  WebSocket: ws://localhost:{cfg.port_ws}")
+    print(f"  Bridge started — {len(mgr)} PLC session(s).")
+    for s in mgr.sessions.values():
+        print(f"    {s.name:<18} {s.cfg.ip:<15} {s.cfg.controller_type:<6} → {s.ws_url}")
+    print("  Point each browser tab at the URL of its controller.")
     print(f"{'-'*55}\n  Ctrl+C to stop\n")
     try:
         await asyncio.Future()
     except (KeyboardInterrupt,asyncio.CancelledError):
         pass
     finally:
-        poller.stop(); poller_task.cancel()
-        if ws_server: ws_server.close()
         if http_runner: await http_runner.cleanup()
-        await conn.disconnect()
+        await mgr.stop_all()
 
 
 def parse_args():
@@ -2295,6 +2784,16 @@ def parse_args():
                    help="Parallel CIP connections the watch list is spread over "
                         "(0 = auto: 4 for logix, 2 for slc). More connections = "
                         "overlapping round-trips = shorter poll cycle.")
+    p.add_argument("--plc",action="append",default=[],metavar="NAME",
+                   help="Start a saved device by name (repeatable). Devices come "
+                        "from plc_bridge_devices.json — the same list the GUI "
+                        "writes. Each one gets its own WebSocket port, so a "
+                        "browser tab per controller can run at the same time.")
+    p.add_argument("--all-plc",action="store_true",dest="all_plc",
+                   help="Start every saved device")
+    p.add_argument("--devices",default=None,
+                   help="Path to the saved-device list (default: "
+                        "plc_bridge_devices.json next to this script)")
     p.add_argument("--config",default=None)
     p.add_argument("--slc",default=None,help="SLC/APS file to load address list from")
     p.add_argument("--ws-port",type=int,default=DEFAULT_WS)
@@ -2310,23 +2809,49 @@ if __name__=="__main__":
         print("Установка зависимостей: pip install websockets aiohttp aiohttp-cors\n")
         sys.exit(1)
     args=parse_args()
-    cfg=Config()
-    if args.config: cfg.load(args.config)
-    if args.ip:           cfg.ip=args.ip
-    if args.slot:         cfg.slot=args.slot
-    if args.rslinx:       cfg.via_rslinx=True
-    if args.type:
-        cfg.controller_type=args.type
-        cfg.processor_type="Logix5000" if args.type=="logix" else cfg.processor_type
-    if args.interval:     cfg.poll_interval=args.interval
-    if args.conn_groups is not None: cfg.conn_groups=args.conn_groups
-    if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
-    if args.slc:          cfg.slc_path=args.slc
-    if args.ws_port:      cfg.port_ws=args.ws_port
-    if args.http_port:    cfg.port_http=args.http_port
-    if not args.ip and not args.config and not args.no_interactive:
-        interactive_setup(cfg)
+    specs=[]
+    if args.plc or args.all_plc:
+        # Named presets from the list the GUI writes. This is the multi-PLC
+        # path: every device becomes its own session on its own WS port, and a
+        # browser tab connects to whichever controller it wants to watch.
+        store=DeviceStore(Path(args.devices) if args.devices else None)
+        if args.all_plc:
+            wanted=list(store.devices)
+        else:
+            wanted=[]
+            for n in args.plc:
+                d=store.find(n)
+                if d: wanted.append(d)
+                else: print(f"[WARN] no saved device named {n!r} in {store.path.name}")
+        if not wanted:
+            known=", ".join(d["name"] for d in store.devices) or "(list is empty)"
+            print(f"\n[ERROR] nothing to start. Saved devices: {known}\n")
+            sys.exit(1)
+        for d in wanted:
+            cfg=device_to_config(d)
+            if args.interval and args.interval!=POLL_IV: cfg.poll_interval=args.interval
+            if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
+            if args.slc: cfg.slc_path=args.slc
+            specs.append((d["name"],cfg))
+    else:
+        cfg=Config()
+        if args.config: cfg.load(args.config)
+        if args.ip:           cfg.ip=args.ip
+        if args.slot:         cfg.slot=args.slot
+        if args.rslinx:       cfg.via_rslinx=True
+        if args.type:
+            cfg.controller_type=args.type
+            cfg.processor_type="Logix5000" if args.type=="logix" else cfg.processor_type
+        if args.interval:     cfg.poll_interval=args.interval
+        if args.conn_groups is not None: cfg.conn_groups=args.conn_groups
+        if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
+        if args.slc:          cfg.slc_path=args.slc
+        if args.ws_port:      cfg.port_ws=args.ws_port
+        if args.http_port:    cfg.port_http=args.http_port
+        if not args.ip and not args.config and not args.no_interactive:
+            interactive_setup(cfg)
+        specs.append((args.ip or cfg.ip, cfg))
     try:
-        asyncio.run(main(cfg))
+        asyncio.run(main(specs, args.http_port or DEFAULT_HTTP))
     except KeyboardInterrupt:
         print("\nBye.")

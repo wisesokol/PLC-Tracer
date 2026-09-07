@@ -98,6 +98,11 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .lad-item{display:flex;align-items:flex-start;gap:6px;padding:6px 8px;cursor:pointer;border-left:2px solid transparent;transition:all .1s;}
 .lad-item:hover{background:var(--bg3);}
 .lad-item.sel{background:#0a1e18;border-left-color:var(--acc);}
+.lad-item.lad-nolog{cursor:default;opacity:.5;}
+.lad-item.lad-nolog:hover{background:transparent;}
+.lad-nolog .lad-num{color:var(--text3);font-style:italic;}
+.lad-nolog .lad-name{color:var(--text3);}
+.lad-nolog .lad-cnt{color:var(--text3);font-style:italic;}
 .lad-num{font-family:var(--mono);font-size:10px;color:var(--text3);min-width:28px;text-align:right;flex-shrink:0;padding-top:1px;}
 .lad-name{font-family:var(--mono);font-size:11px;color:var(--text);overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;white-space:normal;word-break:break-all;line-height:1.35;min-width:0;flex:1;}
 .lad-name.lad-shrink{font-size:8.9px;}
@@ -1240,6 +1245,7 @@ function parseL5X(xmlText){
 
   const syms = {};    // tagName (as-written) → {sym, desc, dataType, value}
   const rungs = [];
+  const otherRoutines = [];  // FBD / ST / SFC — listed, not decoded
   let projName = '';
 
   // ── Controller name ──
@@ -1582,6 +1588,14 @@ function parseL5X(xmlText){
       const routName = routEl.getAttribute('Name') || 'MainRoutine';
       const rungEls  = routEl.querySelectorAll('RLLContent > Rung');
 
+      // Non-ladder routines (FBD, ST, SFC, Sequence) are not decoded. They used
+      // to disappear without a trace, so a tag written only from an FBD sheet
+      // looked like a tag nobody writes. Record them for the routine list.
+      const routType = routEl.getAttribute('Type') || '';
+      if(!rungEls.length && routType && routType !== 'RLL'){
+        otherRoutines.push({ file: `${progName}/${routName}`, type: routType });
+      }
+
       rungEls.forEach(rungEl=>{
         const rungNum  = parseInt(rungEl.getAttribute('Number') || '0');
         const rungType = rungEl.getAttribute('Type') || 'N';
@@ -1902,7 +1916,7 @@ function parseL5X(xmlText){
 
 
   // ── Mark project as L5X ──
-  return { name: projName, syms, rungs, isL5X: true };
+  return { name: projName, syms, rungs, isL5X: true, otherRoutines };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2021,6 +2035,19 @@ function splitTopCommas(s){
   return parts.filter(Boolean);
 }
 
+// ── First operand that names a tag rather than a literal ───────
+// Neutral text puts the constant first as readily as the tag: EQU(1000,Step),
+// MOV(5,Dst), ADD(1,Count,Count). The primary address used to be ops[0] with no
+// fallback, so an instruction written that way was dropped whole — no cell, no
+// cross-reference, no polling — and the rung was drawn without the condition
+// that actually gates it.
+function firstTagOperand(ops){
+  for(const op of ops){
+    if(op && /^[A-Za-z_]/.test(op) && !/^-?[\d.]+$/.test(op)) return op;
+  }
+  return '';
+}
+
 // ── Extract flat instruction list from NeutralText ─────────────
 function extractInsL5X(text){
   const tokens = tokeniseL5X(text);
@@ -2096,13 +2123,27 @@ function extractInsL5X(text){
     else if((inst === 'COP' || inst === 'CPS') && ops.length >= 2){
       addr = ops[1]; // COP/CPS destination is the SECOND operand
     }
+    // AVE(Array, Dim, Dest, Control, Length, Position) — the destination is
+    // ops[2]. The generic "last operand" rule below pointed the write at the
+    // CONTROL structure instead, so the tag that actually receives the average
+    // reported zero writers and the trace stopped there.
+    else if(inst === 'AVE' && ops.length >= 3){
+      addr = ops[2];
+    }
+    // SRT(Array, Dim, Control, Length, Position) sorts in place — the array is
+    // both source and destination, and there is no destination operand at all.
+    else if(inst === 'SRT' && ops.length >= 1){
+      addr = ops[0];
+    }
     // Math/move instructions: destination is LAST operand
     else if(L5X_MATH_DEST.has(inst) && ops.length >= 2){
       const last = ops[ops.length-1];
       if(/^[A-Za-z_]/.test(last) && !/^-?[\d.]+$/.test(last)) addr = last;
     }
-    if(!addr) continue;
-    if(/^-?[\d.]+$/.test(addr)) continue; // pure numeric literal
+    // A literal in the primary slot is not a reason to discard the whole
+    // instruction — fall back to the first operand that names a tag.
+    if(!addr || /^-?[\d.]+$/.test(addr)) addr = firstTagOperand(ops);
+    if(!addr) continue; // nothing but literals — genuinely nothing to trace
 
     result.push({ t: inst, g: addr, r: parseAddrRoleL5X(inst), operands: ops });
   }
@@ -2441,6 +2482,8 @@ function pageToCanvas(px, py){
 //  Returns tree node: {type:'seq'|'par'|'inst', children, inst}
 // ═══════════════════════════════════════════════════════
 const SKIP_TOK = new Set(['SOR','EOR','AFI','NOP','RET','RET_HOME']);
+// Compare instructions may be written with the constant first (EQU 100 N7:0)
+const CMP_I = new Set(['EQU','NEQ','GRT','GEQ','LES','LEQ','LIM','MEQ']);
 // Tokens that are definitely full instruction mnemonics (all uppercase letters)
 function isMnemonic(tok){ return /^[A-Z]{2,5}$/.test(tok) && tok !== 'BST' && tok !== 'NXB' && tok !== 'BND'; }
 
@@ -2503,6 +2546,12 @@ function parseRungTextTree(text){
       g = ops[1] || g;
     }
     // MEQ Source Mask Compare — primary is source (ops[0]), already default
+    // Compare with a constant source (EQU 100 N7:0) — address the tag, not the
+    // constant, so the cell resolves and the tag gets a cross-reference entry.
+    if(CMP_I.has(mnem) && ops.length >= 2 && !looksLikeAddr(g)){
+      const firstAddr = ops.find(o=>looksLikeAddr(o));
+      if(firstAddr) g = firstAddr;
+    }
     if(MATH_DEST_I.has(mnem) && ops.length >= 1){
       const last = ops[ops.length-1];
       if(looksLikeAddr(last) && !/^-?[\d.]+$/.test(last)) g = last;
@@ -2522,6 +2571,11 @@ function parseRungTextTree(text){
         children.push(par);
       } else if(t === 'NXB' || t === 'BND'){
         break;
+      } else if(t === 'AFI'){
+        // Same as the L5X path: an AFI rung is dead, so it must be visible.
+        // Checked before SKIP_TOK, which still bounds operand collection.
+        consume();
+        children.push({type:'inst', inst:{t:'AFI', g:'__afi', r:'in', operands:[]}});
       } else if(SKIP_TOK.has(t)){
         consume();
       } else if(isMnemonic(t)){
@@ -2535,6 +2589,7 @@ function parseRungTextTree(text){
           (t === 'CPT' && ops.length >= 1) ||       // CPT dest expression
           ((t === 'COP' || t === 'FLL') && ops.length >= 2) || // COP/FLL src dest len
           (t === 'LIM' && ops.length >= 2 && /^[#A-Za-z]/.test(ops[1])) || // LIM: Test is ops[1]
+          (CMP_I.has(t) && ops.length >= 2 && ops.some(o=>looksLikeAddr(o))) || // EQU 100 N7:0
           ((t==='JSR'||t==='JMP'||t==='LBL') && /^\d+$/.test(ops[0])) // file number operand
         );
         if(hasMeaningfulOp){
@@ -2579,11 +2634,16 @@ function parseL5XRungTree(neutralText){
   const tokens = tokeniseL5X(neutralText);
   let pos = 0;
 
-  const L5X_SKIP = new Set(['NOP','AFI','END','ENDTASK']);
+  const L5X_SKIP = new Set(['NOP','END','ENDTASK']);
 
   function makeInstNode(tok){
     const inst = normalizeL5XInst(tok.inst);
     if(L5X_SKIP.has(inst)) return null;
+    // AFI is "always false" — it kills the rung. Skipping it drew a permanently
+    // dead rung as an ordinary live one, which is the one error worth avoiding
+    // above all others here. It carries no operand, so it gets the __afi
+    // pseudo-address; the tag collectors walk rung.ins and never see it.
+    if(inst === 'AFI') return {type:'inst', inst:{t:'AFI', g:'__afi', r:'in', operands:[]}};
     const ops = tok.ops.map(s=>s.trim()).filter(s=>s&&s!=='?');
 
     // Determine primary address (same logic as extractInsL5X)
@@ -2630,11 +2690,20 @@ function parseL5XRungTree(neutralText){
     else if((inst === 'COP' || inst === 'CPS') && ops.length >= 2){
       addr = ops[1];
     }
+    // AVE destination is ops[2]; SRT sorts its array in place (see extractInsL5X)
+    else if(inst === 'AVE' && ops.length >= 3){
+      addr = ops[2];
+    }
+    else if(inst === 'SRT' && ops.length >= 1){
+      addr = ops[0];
+    }
     else if(L5X_MATH_DEST.has(inst) && ops.length >= 2){
       const last = ops[ops.length-1];
       if(/^[A-Za-z_]/.test(last) && !/^-?[\d.]+$/.test(last)) addr = last;
     }
-    if(!addr || /^-?[\d.]+$/.test(addr)) addr = ops[0] || '?';
+    // Was: fall back to ops[0], which pinned a literal onto the cell — the cell
+    // then resolved nothing and stayed grey forever. Prefer a real tag.
+    if(!addr || /^-?[\d.]+$/.test(addr)) addr = firstTagOperand(ops) || ops[0] || '?';
 
     return {type:'inst', inst:{t:inst, g:addr, r:parseAddrRoleL5X(inst), operands:ops}};
   }
@@ -3151,7 +3220,7 @@ function parsePlcLiteral(s){
 //  DRAW ONE CONTACT / COIL CELL
 // ═══════════════════════════════════════════════════════
 // OUT_I declared above in parsers section
-const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET']);
+const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI']);
 
 // ── Resolve live value for a tag, following alias link if needed ──
 function resolveLV(tagName){
@@ -3360,6 +3429,9 @@ function _cellStateCore(inst){
     if(_d) console.log(`%c[cellState] "${inst.g}" AOI: no EnableOut → null`, 'color:#80c0ff');
     return null;
   }
+  // AFI never conducts, and it has no tag to look up — it has to answer
+  // before the lookup below, which would return null and draw it grey.
+  if(inst.t === 'AFI') return 'off';
   const lv = resolveLV(inst.g);
   if(!lv || lv.error){
     if(_d) console.log(`%c[cellState] "${inst.g}" t=${inst.t} → null (lv=${lv ? 'error:'+lv.error : 'undefined'})` +
@@ -3412,16 +3484,50 @@ function _cellStateCore(inst){
 
   // EQU/compare — check if current value equals operand
   if(['EQU','GRT','LES','GEQ','LEQ','NEQ','LIM'].includes(t)){
+    // LIM(LowLimit, Test, HighLimit): inst.g is Test (operands[1]), so the
+    // generic two-operand path below compared Test with itself and always fell
+    // through to null — a LIM cell never showed a state. True when
+    // Low <= Test <= High; when Low > High the test inverts (Test <= High OR
+    // Test >= Low), which is how both SLC 500 and Logix define it.
+    if(t === 'LIM' && inst.operands && inst.operands.length >= 3){
+      const numOf = a=>{
+        if(isBinaryWordAddr(a)){ const w = assembleBinaryWord(a); return w === null ? NaN : w; }
+        const litv = parsePlcLiteral(a);
+        if(litv !== null) return litv;
+        const l = resolveLV(a);
+        return l && !l.error ? parseFloat(l.value) : NaN;
+      };
+      const lo = numOf(inst.operands[0]), te = numOf(inst.operands[1]), hi = numOf(inst.operands[2]);
+      if(isNaN(lo) || isNaN(te) || isNaN(hi)){
+        if(_d) console.log(`%c  → LIM: incomplete (low=${lo}, test=${te}, high=${hi}) → null`, 'color:#ff6060');
+        return null;
+      }
+      const r = (lo <= hi) ? ((te >= lo && te <= hi) ? 'on' : 'off')
+                           : ((te <= hi || te >= lo) ? 'on' : 'off');
+      if(_d) console.log(`%c  → LIM(${lo}, ${te}, ${hi})${lo>hi?' [inverted]':''} = "${r}"`, 'color:#80c0ff');
+      return r;
+    }
     if(inst.operands && inst.operands.length >= 2){
-      // Resolve Source A (inst.g = operands[0])
+      // Source A is operands[0] positionally. inst.g is normally that same
+      // tag, but when Source A is a constant — EQU(1000,Step) — inst.g now
+      // carries the OTHER operand, and resolving Source A through inst.g
+      // would compare the tag with itself and report a permanent match.
+      const srcA = inst.operands[0];
       let fv;
-      if(isBinaryWordAddr(inst.g)){
-        const assembled = assembleBinaryWord(inst.g);
+      if(isBinaryWordAddr(srcA)){
+        const assembled = assembleBinaryWord(srcA);
         fv = assembled !== null ? assembled : NaN;
-        if(_d) console.log(`%c  → ${t}: srcA="${inst.g}" is binary word → assembled=${fv}`, 'color:#80c0ff');
+        if(_d) console.log(`%c  → ${t}: srcA="${srcA}" is binary word → assembled=${fv}`, 'color:#80c0ff');
       } else {
-        fv = parseFloat(v);
-        if(_d) console.log(`%c  → ${t}: srcA="${inst.g}" → parseFloat(${JSON.stringify(v)}) = ${fv}`, 'color:#80c0ff');
+        const litA = parsePlcLiteral(srcA);
+        if(litA !== null){
+          fv = litA;
+          if(_d) console.log(`%c  → ${t}: srcA="${srcA}" is a literal → ${fv}`, 'color:#80c0ff');
+        } else {
+          const lvA = (srcA === inst.g) ? lv : resolveLV(srcA);
+          fv = (lvA && !lvA.error) ? parseFloat(lvA.value) : NaN;
+          if(_d) console.log(`%c  → ${t}: srcA="${srcA}" → ${JSON.stringify(lvA ? lvA.value : null)} = ${fv}`, 'color:#80c0ff');
+        }
       }
       // Resolve Source B (operands[1]) — may also be a B-file word address
       let cmp;
@@ -3432,7 +3538,8 @@ function _cellStateCore(inst){
         if(_d) console.log(`%c  → ${t}: srcB="${srcB}" is binary word → assembled=${cmp}`, 'color:#80c0ff');
       } else {
         const lvB = resolveLV(srcB);
-        cmp = lvB ? parseFloat(lvB.value) : parseFloat(srcB);
+        const litB = parsePlcLiteral(srcB);   // 16#FF / 2#0101 / 8#777
+        cmp = lvB ? parseFloat(lvB.value) : (litB !== null ? litB : parseFloat(srcB));
         if(_d) console.log(`%c  → ${t}: srcB="${srcB}" → lvB=${lvB?JSON.stringify(lvB.value):'null'} → cmp=${cmp}`, 'color:#80c0ff');
       }
       if(!isNaN(cmp) && !isNaN(fv)){
@@ -3485,7 +3592,10 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
   // ── Compute state ──
   // AOI blocks may not have a direct liveValue but their sub-members (.EnableOut) do
   const _aoiBlock = inst.t.startsWith('AOI_');
-  const state = (hasLive && (lv || _aoiBlock)) ? (cellState(inst)||'null') : 'null';
+  // AFI is false with or without a PLC connection, so it is not gated on
+  // hasLive — an offline rung must already show that it is dead.
+  const state = (inst.t === 'AFI') ? 'off'
+              : (hasLive && (lv || _aoiBlock)) ? (cellState(inst)||'null') : 'null';
 
   // ── Debug draw trace (verbose only; logs first frame + every 60th frame to avoid flooding) ──
   if(_isDbgVerbose(inst.g) && (_dbgFrameN <= 1 || _dbgFrameN % 60 === 1)){
@@ -3949,6 +4059,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
     // Use origG (original NeutralText name) for display if available
     let fullLabel = inst.origG || inst.g;
     if(inst.g && inst.g.startsWith('__label:')) fullLabel = inst.g.slice(8); // strip __label: prefix
+    if(inst.g === '__afi') fullLabel = 'always false';
     if((inst.t==='JSR'||inst.t==='JMP'||inst.t==='LBL') && inst.fileNum){
       const fn = P?.syms[inst.g]?.sym;
       fullLabel = fn ? `${inst.fileNum}: ${fn}` : `FILE ${inst.fileNum}`;
@@ -6025,7 +6136,7 @@ function showTagMenu(anchorEl, addr, mouseEvent, fileHint){
 
   if(!usages.length){
     // No usages — just select the tag
-    if(!norm.startsWith('__label:')) selectTag(norm);
+    if(!norm.startsWith('__')) selectTag(norm); // __label:, __afi, __ret
     return;
   }
 
@@ -6707,6 +6818,36 @@ function isSyntheticAddr(a){ return /^U3:\d+$/i.test(a); }
 
 // Collect all real PLC tag addresses from the current graph:
 // — tag nodes (tag graph mode) + rung instruction tags (LADDER mode)
+// ── Tag operands beyond inst.g ─────────────────────────────────────────────
+// The watch list used to carry exactly one address per instruction — `inst.g`.
+// Every other operand stayed unread, so Source B of a compare, the sources of
+// MOV/ADD/MUL and the limits of LIM kept the value the project file was
+// exported with, and cellState() computed the green/red of a compare from that
+// stale number. Only instructions whose extra operands are plain scalar tags are
+// listed here: array/file, string, safety and AOI calls carry structures, enum
+// keywords or module references that cannot be read one scalar at a time.
+const OPERAND_TAG_I = new Set([
+  'EQU','NEQ','GRT','GEQ','LES','LEQ','LIM','MEQ',
+  'MOV','MVM','ADD','SUB','MUL','DIV','MOD','SQR','SQRT','NEG','ABS',
+  'AND','OR','XOR','NOT','BTD','SCP','SCL','TOD','FRD','DDV','PID'
+]);
+function instOperandTags(inst){
+  if(!inst || !inst.operands || inst.operands.length < 2) return [];
+  if(!OPERAND_TAG_I.has(inst.t)) return [];
+  const out = [];
+  for(const raw of inst.operands){
+    if(typeof raw !== 'string') continue;
+    const op = raw.trim();
+    if(!op || op === '?') continue;                             // NeutralText placeholder
+    if(parsePlcLiteral(op) !== null) continue;                  // 5, -1.5, 16#FF, 2#0101
+    if(!/^[A-Za-z_]/.test(op)) continue;
+    if(!/^[A-Za-z_][A-Za-z0-9_:.\/\[\]]*$/.test(op)) continue;  // no expressions / spaces
+    if(/\[[^\]]*[A-Za-z][^\]]*\]/.test(op)) continue;           // Arr[VarIndex] — not a scalar
+    out.push(op);
+  }
+  return out;
+}
+
 function getWatchTags(){
   if(!graphData) return [];
   const tags = new Set();
@@ -6746,6 +6887,7 @@ function getWatchTags(){
       n.rung.ins.forEach(i=>{
         if(!i.g || i.g.startsWith('__label:')) return;
         addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
+        instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
       });
     }
   });
@@ -6759,6 +6901,7 @@ function getWatchTags(){
     (rung.ins||[]).forEach(i=>{
       if(!i.g || i.g.startsWith('__label:')) return;
       addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
+      instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
     });
   });
   // ── Online debug: log what tags are being watched for debug-tagged variables ──
@@ -7136,6 +7279,7 @@ function _recKeySet(){
         n.rung.ins.forEach(i=>{
           if(!i.g || i.g.startsWith('__label:')) return;
           addKey(normalizeAddr(i.g), i.t, prog);
+          instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
         });
       }
     });
@@ -7148,6 +7292,7 @@ function _recKeySet(){
     rg.ins.forEach(i=>{
       if(!i.g || i.g.startsWith('__label:')) return;
       addKey(normalizeAddr(i.g), i.t, prog);
+      instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
     });
   });
   return out;
@@ -7413,6 +7558,29 @@ function renderLadderList(){
     div.appendChild(nameSpan);
     div.appendChild(cntSpan);
     div.addEventListener('click', ()=> loadFullLadder(fileKey));
+    list.appendChild(div);
+    nameSpans.push(nameSpan);
+  });
+
+  // Routines whose logic this tool does not decode. Listing them greyed out is
+  // what keeps "nothing writes this tag" honest: the cross-reference cannot see
+  // inside an FBD sheet, and now neither can the user mistake it for empty.
+  (P.otherRoutines||[]).forEach(rt=>{
+    if(searchTerm && !rt.file.toLowerCase().includes(searchTerm)) return;
+    const div = document.createElement('div');
+    div.className = 'lad-item lad-nolog';
+    div.title = `${rt.type} routine — logic is not parsed. Tags used only here are not traced and will not appear in cross-references.`;
+    const numSpan = document.createElement('span');
+    numSpan.className = 'lad-num';
+    numSpan.textContent = rt.type;
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'lad-name';
+    nameSpan.title = rt.file;
+    nameSpan.textContent = rt.file;
+    const cntSpan = document.createElement('span');
+    cntSpan.className = 'lad-cnt';
+    cntSpan.textContent = 'not parsed';
+    div.appendChild(numSpan); div.appendChild(nameSpan); div.appendChild(cntSpan);
     list.appendChild(div);
     nameSpans.push(nameSpan);
   });
