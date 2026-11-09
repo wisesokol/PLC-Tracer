@@ -197,6 +197,61 @@ const IN_I  = new Set(['XIC','XIO','OSR','OSF','ONS']);
 const MATH_DEST_I = new Set(['MOV','ADD','SUB','MUL','DIV','MOD','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','SCP','SCL','TOD','FRN']);
 const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI']);
 
+// ── FIFO/LIFO (FFL/FFU/LFL/LFU) ──
+// Operand order: FFL/LFL = Source, Stack, Control, Length, Position
+//                FFU/LFU = Stack, Dest, Control, Length, Position
+// The block is lit by its own edge-memory bit in the CONTROL structure:
+// .EN for the loaders, .EU for the unloaders. Kept in step with the tracer —
+// test_rec_player_sweep.js compares cell state between the two.
+const FIFO_I      = new Set(['FFL','FFU','LFL','LFU']);
+const FIFO_LOAD_I = new Set(['FFL','LFL']);
+const FIFO_BITS   = ['EN','EU','DN','EM','ER','UL','IN','FD'];
+function fifoParts(inst){
+  if(!inst || !FIFO_I.has(inst.t)) return null;
+  const o = inst.operands || [];
+  const load = FIFO_LOAD_I.has(inst.t);
+  return {
+    load,
+    stackLbl: (inst.t==='LFL'||inst.t==='LFU') ? 'LIFO' : 'FIFO',
+    src   : load ? (o[0]||'') : '',        // word read into the stack
+    dst   : load ? '' : (o[1]||''),        // word written out of the stack
+    stack : load ? (o[1]||'') : (o[0]||''),// stack base (file pointer, # stripped)
+    ctl   : o[2] ? normalizeAddr(o[2]) : '',
+    lenOp : o[3]||'',
+    posOp : o[4]||'',
+    enBit : load ? 'EN' : 'EU'
+  };
+}
+function fifoCtlBit(ctl, bit){
+  if(!ctl) return null;
+  const lv = resolveLV(`${ctl}/${bit}`) || resolveLV(`${ctl}.${bit}`);
+  return (lv && !lv.error && lv.value !== undefined && lv.value !== null) ? (lv.value ? 1 : 0) : null;
+}
+// Live .LEN / .POS of the CONTROL structure. RSLogix bakes both into the rung
+// text as trailing literals, so those stand in whenever nothing is recorded.
+function fifoCtlNum(ctl, sub, literal){
+  if(ctl){
+    const lv = resolveLV(`${ctl}.${sub}`) || resolveLV(`${ctl}/${sub}`);
+    if(lv && !lv.error && lv.value !== undefined && lv.value !== null){
+      const n = Number(lv.value);
+      if(!isNaN(n)) return n;
+    }
+  }
+  const n = parsePlcLiteral(literal);
+  return n !== null ? Number(n) : null;
+}
+// "#N9:0" + LEN -> the concrete stack words N9:0 … N9:<LEN-1>.
+function fifoStackAddrs(stack, len){
+  const base = stripHash(stack||'');
+  const m = base.match(/^([A-Za-z]+\d*):(\d+)$/);
+  if(!m || !len || len < 1) return [];
+  const n = Math.min(len, 128);          // an SLC stack tops out at 128 elements
+  const first = parseInt(m[2], 10);
+  const out = [];
+  for(let i=0;i<n;i++) out.push(`${m[1]}:${first+i}`);
+  return out;
+}
+
 const L5X_INST_MAP = {'NE':'NEQ','EQ':'EQU','GT':'GRT','GE':'GEQ','LT':'LES','LE':'LEQ','MOVE':'MOV','LIMIT':'LIM'};
 const L5X_OUT_INST  = new Set(['OTE','OTL','OTU','OTD','OTDF']);
 const L5X_BOTH_INST = new Set(['TON','TOF','RTO','TONR','CTU','CTD','RES','CTUD','MSG','PID','OSR','OSF','FFL','FFU','LFL','LFU','BSL','BSR','SQI','SQO','SQL','FAL','FSC','DDT','FBC']);
@@ -234,6 +289,7 @@ let tagIndex = [];      // tag name list from header
 let graphData = null;   // graph snapshot from header
 let liveValues = {};    // tag name → {value, ts}
 let recSyms = {};       // addr → {sym, desc} from recording header (graphSnap.syms)
+let P = null;           // {syms, isL5X}: the shared tooltip reads the tracer's P, here the recording's
 let ladderScene = [];
 let currentRungProg = null;
 
@@ -534,6 +590,7 @@ function loadRecording(text, fname){
     if(header.graphSnap.cam) cam = {...header.graphSnap.cam};
     recSyms = header.graphSnap.syms || {};   // sym/desc map (empty for older recordings)
   }
+  P = {syms: recSyms, isL5X: ((graphData && graphData.nodes) || []).some(n => n.rung && n.rung.rawNeutral)};
 
   // Build liveValues from current frame
   applyFrame(baseIdx);
@@ -935,21 +992,24 @@ function updateTagPanel(){
   if(!p.classList.contains('open')) return;
 
   // Collect tags that appear in the graph
-  const graphTags = new Set();
+  const graphTags = new Map();   // tag → {t, prog}
   if(graphData && graphData.nodes){
     graphData.nodes.forEach(n=>{
       if(n.rung && n.rung.ins){
-        n.rung.ins.forEach(ins=>{ if(ins.g) graphTags.add(ins.g); });
+        const prog = (n.rung.file || '').split('/')[0] || null;
+        n.rung.ins.forEach(ins=>{ if(ins.g && !graphTags.has(ins.g)) graphTags.set(ins.g, {t:ins.t, prog}); });
       }
     });
   }
 
   let html = '<div style="font-family:var(--mono);font-size:11px;color:var(--acc);padding:4px 6px;border-bottom:1px solid var(--border);">TAGS ON GRAPH</div>';
-  const sorted = [...graphTags].sort();
+  const sorted = [...graphTags.keys()].sort();
   for(const tag of sorted){
     const lv = liveValues[tag];
-    const v = lv ? lv.value : '-';
-    const cls = v === true || v === 1 ? 'on' : v === false || v === 0 ? 'off' : '';
+    const {t, prog} = graphTags.get(tag);
+    const vt = lv ? tagValueText(tag, lv, prog, t) : null;
+    const v = vt === null ? '-' : vt;
+    const cls = v === '1' ? 'on' : v === '0' ? 'off' : '';
     html += `<div class="tag-row"><span class="tag-name">${tag}</span><span class="tag-val ${cls}">${v}</span></div>`;
   }
   p.innerHTML = html;
@@ -1054,6 +1114,8 @@ function parseRungTextTree(text){
     if((mnem==='COP'||mnem==='FLL')&&ops.length>=2){g=ops[1];g=normalizeAddr(g);return{type:'inst',inst:{t:mnem,g,r:'out',operands:ops}};}
     if(mnem==='PID'&&ops.length>=1){g=ops[0];g=normalizeAddr(g);return{type:'inst',inst:{t:mnem,g,r:'both',operands:ops}};}
     if((mnem==='IIM'||mnem==='IOM')&&ops.length>=1){g=ops[0];g=normalizeAddr(g);return{type:'inst',inst:{t:mnem,g,r:mnem==='IOM'?'out':'in',operands:ops}};}
+    // FFL/FFU/LFL/LFU: primary address is the CONTROL structure, as in the tracer
+    if(FIFO_I.has(mnem)&&ops.length>=3&&looksLikeAddr(ops[2])){g=normalizeAddr(ops[2]);return{type:'inst',inst:{t:mnem,g,r:'both',operands:ops}};}
     if(mnem==='LIM'&&ops.length>=2)g=ops[1]||g;
     if(MATH_DEST_I.has(mnem)&&ops.length>=1){const last=ops[ops.length-1];if(looksLikeAddr(last)&&!/^-?[\d.]+$/.test(last))g=last;}
     g=normalizeAddr(g);
@@ -1346,6 +1408,13 @@ function resolveLV(tagName){
 
 function cellState(inst){
   if(inst.t === 'AFI') return 'off';   // no tag to resolve; never conducts
+  // FFL/FFU/LFL/LFU are lit by their CONTROL edge-memory bit, not by the
+  // scalar value of whichever operand happens to be the primary address.
+  if(FIFO_I.has(inst.t)){
+    const _fp = fifoParts(inst);
+    const _eb = _fp ? fifoCtlBit(_fp.ctl, _fp.enBit) : null;
+    return _eb === null ? null : (_eb ? 'on' : 'off');
+  }
   const lv = resolveLV(inst.g);
   if(!lv || lv.error) return null;
   const v = lv.value, t = inst.t;
@@ -1409,75 +1478,295 @@ function cellState(inst){
 
 // ═══════════════════════════════════════════════════════
 //  TOOLTIP
+//  The block below is the tracer's own, byte for byte (test_tooltip_same.js).
+//  These are the tracer helpers it needs that the player did not have.
 // ═══════════════════════════════════════════════════════
-const BIG_TT = new Set(['MOV','ADD','SUB','MUL','DIV','MOD','CPT','AND','OR','XOR',
-  'EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ',
-  'TON','TOF','RTO','CTU','CTD',
-  'COP','CPS','FLL','MSG','GSV','SSV',
-  'SCP','SCL','TOD','FRN','PID','IIM','IOM',
-  'SWPB','MVM','DTOS','SRT','TND','NEG','ABS','SQR','CLR','BTD','SIZE',
-  'CONCAT','DELETE','INSERT','MID','FIND','STOD','RTOS','STOR','LOWER','UPPER']);
-
-// Format structured value (TIMER/COUNTER raw byte arrays → PRE:X ACC:Y)
-function formatDisplayValue(tagName, lv, prog){
-  if(!lv) return null;
-  if(lv.error) return {text: `ERR: ${lv.error}`, color: '#c07030'};
-  const v = lv.value;
-  // If value is an array (raw bytes from bridge), try to show PRE/ACC from sub-tags
-  if(Array.isArray(v)){
-    const base = tagName;
-    const qPre = prog ? `${prog}.${base}.PRE` : null;
-    const qAcc = prog ? `${prog}.${base}.ACC` : null;
-    const pre = (qPre && liveValues[qPre]) || liveValues[base+'.PRE'];
-    const acc = (qAcc && liveValues[qAcc]) || liveValues[base+'.ACC'];
-    if(pre || acc){
-      const pv = pre ? pre.value : '?';
-      const av = acc ? acc.value : '?';
-      return {text: `= PRE:${pv} ACC:${av}`, color: 'var(--blue)'};
+function getDesc(addr){ return recSyms[addr] || null; }
+function addrType(a){
+  const m=a.match(/^([A-Za-z]+)\d*[:/]/);
+  if(!m)return'?';
+  const p=m[1].toUpperCase();
+  const MAP={I:'I',O:'O',B:'B',N:'N',F:'F',T:'T',C:'C',R:'R',S:'S',A:'A',MG:'MG',PD:'PD'};
+  return MAP[p]||p;
+}
+function typeLabel(t){
+  return{I:'INPUT',O:'OUTPUT',B:'BIT',N:'INTEGER',F:'FLOAT',T:'TIMER',C:'COUNTER',R:'CONTROL',S:'STATUS',A:'ASCII',MG:'MESSAGE',U:'SUBROUTINE'}[t]||t;
+}
+function isBinaryWordAddr(addr){
+  return /^B\d+:\d+$/i.test(addr);
+}
+function assembleBinaryWord(addr){
+  if(!isBinaryWordAddr(addr)) return null;
+  let word = 0;
+  let anyBit = false;
+  for(let bit = 0; bit < 16; bit++){
+    const lv = resolveLV(addr + '/' + bit);
+    if(lv && lv.value !== undefined){
+      anyBit = true;
+      if(lv.value) word |= (1 << bit);
     }
-    return {text: `= [${v.length} bytes]`, color: 'var(--text3)'};
   }
-  const color = (v===1||v==='1'||v===true) ? 'var(--green)'
-    : (v===0||v==='0'||v===false) ? 'var(--red)'
-    : 'var(--blue)';
-  return {text: `= ${v}`, color};
+  return anyBit ? word : null;
+}
+function toBin16(val){
+  return (val >>> 0).toString(2).padStart(16, '0').slice(-16);
 }
 
-function showTT(h, cx, cy){
+// ── TOOLTIP ──
+// One tooltip for every block: this whole block, down to END TOOLTIP, is byte for
+// byte the same in PLC-tracer-HMI.html, plc-tracer-500-v160.html and
+// PLC_Tracer_Player.html (test_tooltip_same.js). The player supplies P, getDesc and
+// the address helpers from its recording, so nothing here knows which page it is in.
+//
+// Timer time base. SLC 500 / MicroLogix keep it in the instruction itself
+// (TON T4:1 1.0 10 0 → 1.0 s; bit 9 of the control word mirrors it), so it is
+// known offline. Logix has no time base: TIMER .PRE/.ACC always count ms.
+const TIMER_BASE_I = new Set(['TON','TOF','RTO','TONR','TOFR','RTOR']);
+function timerBase(t, ops){
+  if(!TIMER_BASE_I.has(t)) return null;
+  if(P && P.isL5X) return {sec:0.001, txt:'0.001 s', note:'1 ms, fixed'};
+  const op = ops && ops[1];
+  // Only a genuine base — a short "TON T4:0 3000" must not read its preset as one
+  if(typeof op !== 'string' || !op.includes('.') || ![1, 0.01, 0.001].includes(parseFloat(op))) return null;
+  return {sec:parseFloat(op), txt:`${op} s`, note:''};
+}
+// "(10 s)" after a PRE/ACC value; '' when the base or the value is unknown.
+// toFixed(3) drops float noise (100 × 0.001) — no base is finer than 1 ms.
+function timerSecsNote(lv, tb){
+  const v = lv && !lv.error ? lv.value : null;
+  const n = (v === null || v === undefined || v === '') ? NaN : Number(v);
+  if(!tb || !isFinite(n)) return '';
+  return `<span class="tt-ops-val" style="color:var(--text3);font-size:9px;margin-left:4px">(${+(n * tb.sec).toFixed(3)} s)</span>`;
+}
+
+// ── One value format, online and offline ──
+// The same tag arrives as true/false from the bridge and as 1/0 from a PRN or L5X
+// file. A bare SLC structure arrives as {CTL,PRE,ACC} or {CTL,LEN,POS} online, but
+// as a plain number from a PRN and as "PRE:x ACC:y" from an L5X. Every text that
+// prints a value goes through these helpers, so it reads the same in all of them.
+const TT_TC_I = new Set(['TON','TOF','RTO','TONR','TOFR','RTOR','CTU','CTD','CTUD']);
+
+// A sub-member of a structure, in both spellings: the bridge answers T4:0.DN, a
+// PRN stores T4:0/DN. null when it is unknown or came back with a read error.
+function tagSubLV(addr, sub, prog){
+  const saved = currentRungProg;
+  if(prog) currentRungProg = prog;
+  const lv = resolveLV(`${addr}.${sub}`) || resolveLV(`${addr}/${sub}`);
+  currentRungProg = saved;
+  return (lv && !lv.error && lv.value !== undefined && lv.value !== null) ? lv : null;
+}
+
+// 'tc' = TIMER or COUNTER element, 'ctl' = CONTROL element, null = anything else.
+function lvStructKind(addr, prog, instType){
+  if(TT_TC_I.has(instType)) return 'tc';
+  if(FIFO_I.has(instType))  return 'ctl';
+  if(!addr) return null;
+  if(P && P.isL5X){
+    const q  = prog && !addr.startsWith(prog + '.') ? `${prog}.${addr}` : null;
+    const dt = String(((q && P.syms[q]) || P.syms[addr] || {}).dataType || '').toUpperCase();
+    return (dt === 'TIMER' || dt === 'COUNTER') ? 'tc' : dt === 'CONTROL' ? 'ctl' : null;
+  }
+  return /^[TC]\d*:\d+$/i.test(addr) ? 'tc' : /^R\d*:\d+$/i.test(addr) ? 'ctl' : null;
+}
+
+// One raw value as text: a bit is 1/0, a structure from the bridge is its DN bit
+// (bit 13 of the control word) or POS/LEN.
+function lvText(v){
+  if(v === true || v === false) return v ? '1' : '0';
+  if(Array.isArray(v)) return `[${v.length} bytes]`;
+  if(v && typeof v === 'object'){
+    if(v.PRE !== undefined) return String((v.CTL >> 13) & 1);
+    if(v.LEN !== undefined) return `${v.POS}/${v.LEN}`;
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
+// The radix a tag was exported in (16#0000_0079), applied to the value it has now:
+// the text in the L5X file is only right until the value changes.
+function radixText(raw, v){
+  const m = /^(16|2|8)#([0-9A-Fa-f_]+)$/.exec(String(raw));
+  const n = (v === true || v === false) ? (v ? 1 : 0) : Number(v);
+  if(!m || !Number.isInteger(n)) return String(raw);
+  const base = +m[1], parts = m[2].split('_'), width = parts.join('').length;
+  const bits = base === 16 ? width * 4 : base === 8 ? width * 3 : width;
+  let s = (n < 0 ? n + Math.pow(2, Math.min(bits, 32)) : n).toString(base).padStart(width, '0');
+  if(/[A-F]/.test(m[2])) s = s.toUpperCase();
+  if(parts.length > 1){   // same digit grouping as the export
+    const size = parts[parts.length - 1].length;
+    s = s.replace(new RegExp(`\\B(?=(.{${size}})+$)`, 'g'), '_');
+  }
+  return `${base}#${s}`;
+}
+
+// What a tag shows where there is room for a single value: tooltip line, right
+// panel, tag list, rung card, player TAGS. A timer or counter is its DN bit, the
+// way a PRN snapshot already stores it; a CONTROL element is POS/LEN. null = nothing
+// known yet.
+function tagValueText(addr, lv, prog, instType){
+  const v = lv ? lv.value : undefined;
+  if(v && typeof v === 'object' && !Array.isArray(v)) return lvText(v);
+  const kind = lvStructKind(addr, prog, instType);
+  if(kind === 'tc'){
+    const dn = tagSubLV(addr, 'DN', prog);
+    return dn ? (dn.value ? '1' : '0') : null;
+  }
+  if(kind === 'ctl'){
+    const pos = tagSubLV(addr, 'POS', prog), len = tagSubLV(addr, 'LEN', prog);
+    return (pos && len) ? `${pos.value}/${len.value}` : null;
+  }
+  return (v === undefined || v === null) ? null : lvText(v);
+}
+
+function showTT(h,cx,cy){
+  const tt=document.getElementById('tt');
+  if(!h||!h.hit){tt.style.display='none';return;}
+  const hit=h.hit, inst=hit.inst;
+  // Check cursor is inside the visual box of the cell, not just the hit-zone
+  const _isBig = BIG_I.has(inst.t);
+  const _boxW = Math.min(hit.w-6, _isBig?52:40)*cam.z;
+  const _boxH = (_isBig?34:24)*cam.z;
+  const _absX = h.scene.ox + hit.x, _absY = h.scene.oy + hit.y;
+  const _sc = w2s(_absX + hit.w/2, _absY + hit.h/2);
+  const _rect = canvas.getBoundingClientRect();
+  const _bx = _sc.x + _rect.left - _boxW/2, _by = _sc.y + _rect.top - _boxH/2;
+  if(cx < _bx || cx > _bx+_boxW || cy < _by || cy > _by+_boxH){
+    tt.style.display='none'; return;
+  }
+  // Determine program scope from the rung this cell belongs to
+  ttFill(inst, h.scene?.rung?.file ? h.scene.rung.file.split('/')[0] : null);
+  ttPlace(cx, cy);
+}
+
+// Beside the cursor, moved back into the window when it would leave it.
+function ttPlace(cx, cy){
   const tt = document.getElementById('tt');
-  if(!h || !h.hit){ tt.style.display='none'; return; }
-  const inst = h.hit.inst;
-  const rungProg = h.scene?.rung?.file ? h.scene.rung.file.split('/')[0] : null;
-  const qualKey = rungProg ? `${rungProg}.${inst.g}` : null;
+  tt.style.display = 'block';
+  const r = tt.getBoundingClientRect();
+  let L = cx + 14, T = cy - 10;
+  if(L + r.width  > window.innerWidth  - 8) L = cx - r.width - 10;
+  if(T + r.height > window.innerHeight - 8) T = window.innerHeight - r.height - 8;
+  tt.style.left = Math.max(4, L) + 'px';
+  tt.style.top  = Math.max(4, T) + 'px';
+}
 
-  // Tag name
-  document.getElementById('tt-n').textContent = inst.g;
+// Fills the tooltip for one block. Whatever hovers a block comes through here, so
+// a block reads the same on the ladder, on an HMI indicator and in the player.
+function ttFill(inst, rungProg){
+  const saved = currentRungProg;
+  currentRungProg = rungProg || null;
+  try { _ttFill(inst, rungProg); } finally { currentRungProg = saved; }
+}
+function _ttFill(inst, rungProg){
+  const qualKey  = rungProg ? `${rungProg}.${inst.g}` : null;
+  const info = (qualKey && P?.syms[qualKey]) || P?.syms[inst.g];
+  const descEntry = getDesc(inst.g);
 
-  // Symbol + description from recording header (graphSnap.syms)
-  // Lookup: bare key (SLC + normalized L5X) first, then qualified key (L5X fallback)
-  const info = recSyms[inst.g] || (qualKey && recSyms[qualKey]) || {};
-  document.getElementById('tt-s').textContent = info.sym || '';
+  // ── Resolve alias ──
+  const aliasFor   = info?.aliasFor || '';           // e.g. "Local:1:I.Data.5"
+  const aliasLabel = aliasFor ? `→ ${aliasFor}` : '';
+
+  // Tag name line: show aliasFor beneath if present
+  const isSubFile = /^U3:\d+$/.test(inst.g);
+  const displayG = inst.origG || inst.g;
+  const ttName = isSubFile ? `FILE ${inst.g.replace('U3:','')}` : displayG;
+  document.getElementById('tt-n').textContent = ttName;
+  document.getElementById('tt-s').textContent = aliasLabel || info?.sym || descEntry?.sym || '';
 
   // Type line
-  document.getElementById('tt-t').textContent = inst.t;
+  const typeStr = P?.isL5X
+    ? (info?.dataType ? `${inst.t} · ${info.dataType}${aliasFor ? ' · ALIAS' : ''}` : inst.t)
+    : `${inst.t} · ${typeLabel(addrType(inst.g))}`;
+  document.getElementById('tt-t').textContent = typeStr;
 
-  document.getElementById('tt-d').textContent = info.desc || '';
+  // Description
+  const desc = info?.desc || descEntry?.desc || '';
+  document.getElementById('tt-d').textContent = desc;
 
-  // Value — scope-aware
-  const lv = (qualKey && liveValues[qualKey]) || liveValues[inst.g] || null;
+  // Value — scope-aware: prefer qualified key, then bare, then aliasFor
+  const lv = (qualKey && liveValues[qualKey]) || liveValues[inst.g] || (aliasFor && liveValues[aliasFor]) || null;
   const tv = document.getElementById('tt-v');
-  if(lv){
-    const fmt = formatDisplayValue(inst.g, lv, rungProg);
-    tv.textContent = fmt.text;
-    tv.style.color = fmt.color;
+  if(inst.t.startsWith('AOI_')){
+    // AOI: show EnableOut status instead of instance tag value
+    const eo = liveValues[inst.g+'.EnableOut'];
+    if(eo){
+      tv.textContent = eo.value ? 'EnableOut = 1 (ON)' : 'EnableOut = 0 (OFF)';
+      tv.style.color = eo.value ? 'var(--green)' : 'var(--red)';
+    } else {
+      tv.textContent = '';
+    }
+  } else if(FIFO_I.has(inst.t)){
+    // The primary address is the CONTROL structure, whose scalar value is a
+    // bit-packed status word — "= 4096" would be noise. Summarise the queue
+    // instead; the operand rows below carry the detail.
+    const _fp  = fifoParts(inst);
+    const _len = fifoCtlNum(_fp.ctl,'LEN',_fp.lenOp);
+    const _pos = fifoCtlNum(_fp.ctl,'POS',_fp.posOp);
+    if(_pos === null || _len === null){
+      tv.textContent = '';
+    } else {
+      tv.textContent = _pos === 0    ? `empty  (0 / ${_len})`
+                     : _pos >= _len  ? `FULL  (${_pos} / ${_len})`
+                     :                 `${_pos} queued  (${_pos} / ${_len})`;
+      tv.style.color = _pos === 0 ? 'var(--text3)' : _pos >= _len ? '#e09020' : 'var(--blue)';
+    }
+  } else if(lv){
+    // A timer or counter prints no value line: the rows below already carry DN,
+    // PRE and ACC, and any single value would only repeat them. A read error shows.
+    const vt = (lv.error || TT_TC_I.has(inst.t)) ? null : tagValueText(inst.g, lv, rungProg, inst.t);
+    const dispVal = lv.error ? `ERR: ${lv.error}` : (vt === null ? '' : `= ${vt}`);
+    // If value came from alias target, show that
+    const fromAlias = !(qualKey && liveValues[qualKey]) && !liveValues[inst.g] && aliasFor && liveValues[aliasFor];
+    tv.textContent = (fromAlias && dispVal) ? `${dispVal}  (via ${aliasFor})` : dispVal;
+    tv.style.color = lv.error ? '#c07030'
+      : vt === '1' ? 'var(--green)'
+      : vt === '0' ? 'var(--red)'
+      : 'var(--blue)';
+    const tts = document.getElementById('tt-t');
+    if(lv.prn)     tts.textContent = typeStr + ' · 📋 PRN';
+    else if(lv.l5x) tts.textContent = typeStr + ' · 📄 L5X';
   } else {
     tv.textContent = '';
   }
 
-  // Operand rows for multi-operand instructions
+  // ── Operand rows for multi-operand instructions ──
   const opsEl = document.getElementById('tt-ops');
+  const BIG_TT = new Set(['MOV','ADD','SUB','MUL','DIV','MOD','CPT','AND','OR','XOR',
+                           'EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ',
+                           'TON','TOF','RTO','CTU','CTD',
+                           'COP','CPS','FLL','MSG','GSV','SSV',
+                           'SCP','SCL','TOD','FRN','PID','IIM','IOM',
+                           'SWPB','MVM','DTOS','SRT','TND','NEG','ABS','SQR','CLR','BTD','SIZE',
+                           'FFL','FFU','LFL','LFU',
+                           'CONCAT','DELETE','INSERT','MID','FIND','STOD','RTOS','STOR','LOWER','UPPER']);
   const ops = inst.operands || [];
-  if(BIG_TT.has(inst.t) && ops.length > 0){
+  if(inst.t.startsWith('AOI_') && ops.length > 0){
+    // ── AOI tooltip: show operands + all sub-member values ──
+    let html = '';
+    // Operand rows: AOI_Sequence, ControlData
+    const aoiLbls = ['AOI_' + inst.t.slice(4), 'ControlData'];
+    ops.forEach((op, i) => {
+      const lbl = aoiLbls[i] || `Op ${i+1}`;
+      const origOp = inst.origOperands ? inst.origOperands[i] : null;
+      const dispOp = origOp || op;
+      html += `<div class="tt-ops-row"><span class="tt-ops-lbl">${lbl}</span><span class="tt-ops-addr">${dispOp}</span></div>`;
+    });
+    // Sub-member values
+    const base = inst.g;
+    const skipSubs = new Set(['EnableIn','EnableOut']);
+    for(const k in liveValues){
+      if(!k.startsWith(base + '.')) continue;
+      const sub = k.slice(base.length + 1);
+      if(sub.includes('.') || skipSubs.has(sub)) continue;
+      const sv = liveValues[k];
+      const v = sv.value;
+      const cls = v===1||v===true?'on': v===0||v===false?'off':'num';
+      html += `<div class="tt-ops-row"><span class="tt-ops-lbl">${sub}</span><span class="tt-ops-val ${cls}">= ${lvText(v)}</span></div>`;
+    }
+    opsEl.innerHTML = html;
+    opsEl.style.display = 'block';
+  } else if(TT_TC_I.has(inst.t) || (BIG_TT.has(inst.t) && ops.length > 0)){
+    // Label mapping by instruction type
     const lbls = (()=>{
       if(['MOV'].includes(inst.t))           return ['Source','Dest'];
       if(['ADD','SUB','MUL','DIV','MOD','AND','OR','XOR'].includes(inst.t)) return ['Src A','Src B','Dest'];
@@ -1485,13 +1774,14 @@ function showTT(h, cx, cy){
       if(['EQU','GRT','LES','GEQ','LEQ','NEQ'].includes(inst.t)) return ['Src A','Src B'];
       if(['LIM'].includes(inst.t))           return ['Low Lim','Test','High Lim'];
       if(['MEQ'].includes(inst.t))           return ['Source','Mask','Compare'];
-      if(['TON','TOF','RTO'].includes(inst.t)) return ['Timer','Preset','Accum'];
-      if(['CTU','CTD'].includes(inst.t))     return ['Counter','Preset','Accum'];
+      if(TIMER_BASE_I.has(inst.t))           return ['Timer','Preset','Accum'];
+      if(TT_TC_I.has(inst.t))                return ['Counter','Preset','Accum'];
       if(['COP','CPS','FLL'].includes(inst.t)) return ['Source','Dest','Length'];
       if(['SCP'].includes(inst.t))           return ['Input','Input Min','Input Max','Output Min','Output Max','Dest'];
       if(['SCL'].includes(inst.t))           return ['Source','Rate','Offset','Dest'];
       if(['TOD','FRN'].includes(inst.t))     return ['Source','Dest'];
       if(['PID'].includes(inst.t))           return ['Control','Process Var','Control Var'];
+      if(['IIM','IOM'].includes(inst.t))     return ['Address','Mask','Slot'];
       if(['GSV'].includes(inst.t))           return ['Class','Instance','Attr','Dest'];
       if(['SSV'].includes(inst.t))           return ['Class','Instance','Attr','Source'];
       if(['SWPB'].includes(inst.t))          return ['Source','Order Mode','Dest'];
@@ -1500,6 +1790,11 @@ function showTT(h, cx, cy){
       if(['DTOS','STOD','RTOS','STOR','LOWER','UPPER'].includes(inst.t)) return ['Source','Dest'];
       if(['NEG','ABS','SQR','CLR','NOT'].includes(inst.t))  return ['Source','Dest'];
       if(['SRT'].includes(inst.t))           return ['Array','Dim to Vary','Control','Length','Position'];
+      // Loaders take the data word first, unloaders take the stack first
+      if(inst.t==='FFL')                     return ['Source','FIFO','Control','Length','Position'];
+      if(inst.t==='LFL')                     return ['Source','LIFO','Control','Length','Position'];
+      if(inst.t==='FFU')                     return ['FIFO','Dest','Control','Length','Position'];
+      if(inst.t==='LFU')                     return ['LIFO','Dest','Control','Length','Position'];
       if(['SIZE'].includes(inst.t))          return ['Source','Dim to Vary','Size'];
       if(['CONCAT'].includes(inst.t))        return ['Source A','Source B','Dest'];
       if(['DELETE','MID'].includes(inst.t))  return ['Source','Qty','Start','Dest'];
@@ -1509,33 +1804,172 @@ function showTT(h, cx, cy){
       return ops.map((_,i)=>`Op ${i+1}`);
     })();
 
-    const isLiteral = s => /^-?[\d.]+$/.test(s) || /^(16|2|8)#/.test(s);
-    const oldProg = currentRungProg;
-    currentRungProg = rungProg;
+    const isAddr = s => /^[A-Za-z]/.test(s);  // any identifier starting with letter = tag name
+    const isLiteral = s => /^-?[\d.]+$/.test(s) || /^(16|2|8)#/.test(s); // numeric or radix literal
 
+    // For Timer/Counter instructions the "Counter/Timer" op is a structure tag
+    // and its scalar live value is a bit-packed status DINT (e.g. 536870912),
+    // which is misleading. Preset/Accum are read from .PRE / .ACC sub-members,
+    // not from extra positional operands — NeutralText often emits them as `?`.
+    // Synthesize the three rows directly for these instructions.
+    const isTimerCtr = TT_TC_I.has(inst.t);
+    // FFL/FFU/LFL/LFU need their own rows: the Length and Position operands are
+    // literals frozen into the rung text, while the values that matter live in
+    // the CONTROL structure. The generic path would show the stale literals.
+    const isFifo = FIFO_I.has(inst.t);
     let html = '';
+    if(isFifo){
+      const fp = fifoParts(inst);
+      const ttRow = (lbl, addr, valHtml) =>
+        `<div class="tt-ops-row"><span class="tt-ops-lbl">${lbl}</span>` +
+        `<span class="tt-ops-addr">${addr}</span>${valHtml||''}</div>`;
+      const ttVal = a => {
+        const l = a ? resolveLV(a) : null;
+        if(!l || l.error || l.value === undefined || l.value === null) return '';
+        const v = l.value;
+        const cls = (v===1||v===true) ? 'on' : (v===0||v===false) ? 'off' : 'num';
+        return `<span class="tt-ops-val ${cls}">= ${lvText(v)}</span>`;
+      };
+      // Operand rows in RSLogix order. The stack keeps its '#' so it does not
+      // read as a single word.
+      if(fp.load) html += ttRow('Source', fp.src, ttVal(fp.src));
+      // '#' is the RSLogix 500 file-pointer marker — Logix array operands
+      // (Tag.Array[0]) are written plain and must not get one.
+      const _sPfx = (P && P.isL5X) ? '' : '#';
+      html += ttRow(fp.stackLbl, _sPfx+stripHash(fp.stack), '');
+      if(!fp.load) html += ttRow('Dest', fp.dst, ttVal(fp.dst));
+      html += ttRow('Control', fp.ctl || '—', '');
+      const fLen = fifoCtlNum(fp.ctl,'LEN',fp.lenOp);
+      const fPos = fifoCtlNum(fp.ctl,'POS',fp.posOp);
+      html += ttRow('Length',   fp.ctl?`${fp.ctl}.LEN`:'—', fLen===null?'':`<span class="tt-ops-val num">= ${fLen}</span>`);
+      html += ttRow('Position', fp.ctl?`${fp.ctl}.POS`:'—', fPos===null?'':`<span class="tt-ops-val num">= ${fPos}</span>`);
+      // ── Queue contents, head on the left. Cells below POS hold live entries;
+      //    the rest are stale leftovers the instruction will overwrite.
+      const qAddrs = fifoStackAddrs(fp.stack, fLen);
+      if(qAddrs.length){
+        const cells = qAddrs.map((a,i)=>{
+          const l = resolveLV(a);
+          const known = l && !l.error && l.value !== undefined && l.value !== null;
+          const filled = fPos !== null && i < fPos;
+          const txt = known ? lvText(l.value) : '·';
+          const style = filled
+            ? 'background:#14304a;border-color:#4a9eff88;color:#9fd0ff'
+            : 'background:#111a22;border-color:#2a3a48;color:#54646f';
+          return `<span title="${a}${known?' = '+txt:''}" style="display:inline-block;min-width:15px;`+
+                 `padding:0 3px;margin-right:2px;border:1px solid;border-radius:2px;`+
+                 `text-align:center;${style}">${txt}</span>`;
+        }).join('');
+        const note = fPos === null ? 'position unknown'
+                   : fPos === 0    ? 'empty'
+                   : `${fPos} of ${fLen} queued · head = ${qAddrs[0]}`;
+        html += `<div class="tt-ops-row" style="display:block">`+
+                `<span class="tt-ops-lbl">Queue</span>`+
+                `<div style="margin-top:3px;white-space:nowrap">${cells}</div>`+
+                `<div style="color:var(--text3);font-size:9px;margin-top:2px">${note}</div>`+
+                `</div>`;
+      }
+      // ── CONTROL status bits. The three this instruction actually drives are
+      //    shown solid; the rest belong to other instruction families.
+      const own = new Set([fp.enBit,'DN','EM']);
+      const bits = FIFO_BITS.map(b=>{
+        const v = fifoCtlBit(fp.ctl, b);
+        const c = v===null ? '#4a5a68' : v ? '#3ddc84' : (own.has(b) ? '#6a7a88' : '#3a4a58');
+        const mark = v===null ? '?' : v ? '●' : '·';
+        return `<span style="color:${c};margin-right:6px;${own.has(b)?'':'opacity:.5'}">${b}${mark}</span>`;
+      }).join('');
+      html += `<div class="tt-ops-row" style="display:block">`+
+              `<span class="tt-ops-lbl">${fp.ctl||'Control'}</span>`+
+              `<div style="margin-top:3px;font-size:9px">${bits}</div>`+
+              `</div>`;
+    } else if(isTimerCtr){
+      const baseAddr = inst.g;
+      const normBase = normalizeAddr(baseAddr);
+      const bQual = rungProg ? `${rungProg}.${normBase}` : null;
+      const bInfo = (bQual && P?.syms[bQual]) || P?.syms[normBase] || P?.syms[baseAddr];
+      const bAlias = bInfo?.aliasFor || '';
+      const readSub = sub => tagSubLV(normBase, sub, rungProg)
+                          || (bAlias && tagSubLV(bAlias, sub, rungProg))
+                          || null;
+      const dn = readSub('DN');
+      const dnHtml = dn ? `<span class="tt-ops-val ${dn.value?'on':'off'}">DN=${dn.value?1:0}</span>` : '';
+      const aliasNote = bAlias ? `<span style="color:var(--text3);font-size:9px"> → ${bAlias}</span>` : '';
+      html += `<div class="tt-ops-row">
+        <span class="tt-ops-lbl">${lbls[0]}</span>
+        <span class="tt-ops-addr">${baseAddr}${aliasNote}</span>
+        ${dnHtml}
+      </div>`;
+      // Time base sits between Timer and Preset, as RSLogix 500 draws the block;
+      // PRE/ACC then also say what they mean in seconds. Counters get neither.
+      const tb = timerBase(inst.t, ops);
+      if(tb) html += `<div class="tt-ops-row">
+        <span class="tt-ops-lbl">Time Base</span>
+        <span class="tt-ops-val lit">${tb.txt}</span>
+        ${tb.note ? `<span style="color:var(--text3);font-size:9px">${tb.note}</span>` : ''}
+      </div>`;
+      const preLv = readSub('PRE');
+      const accLv = readSub('ACC');
+      const preVal = preLv ? `<span class="tt-ops-val num">= ${preLv.value}</span>${timerSecsNote(preLv, tb)}` : '';
+      const accVal = accLv ? `<span class="tt-ops-val num">= ${accLv.value}</span>${timerSecsNote(accLv, tb)}` : '';
+      html += `<div class="tt-ops-row">
+        <span class="tt-ops-lbl">${lbls[1]}</span>
+        <span class="tt-ops-addr">${baseAddr}.PRE</span>
+        ${preVal}
+      </div>`;
+      html += `<div class="tt-ops-row">
+        <span class="tt-ops-lbl">${lbls[2]}</span>
+        <span class="tt-ops-addr">${baseAddr}.ACC</span>
+        ${accVal}
+      </div>`;
+    } else {
     ops.forEach((op, i) => {
       const lbl = lbls[i] || `Op ${i+1}`;
       if(!isLiteral(op)){
         const normOp = normalizeAddr(op);
-        const opLv = resolveLV(normOp) || resolveLV(op);
+        const opQualKey = rungProg ? `${rungProg}.${normOp}` : null;
+        const opInfo = (opQualKey && P?.syms[opQualKey]) || P?.syms[normOp] || P?.syms[op];
+        const opLv = (opQualKey && liveValues[opQualKey]) || liveValues[normOp] || liveValues[op];
+        // Resolve alias chain
+        const opAlias = opInfo?.aliasFor || '';
+        const opLvResolved = opLv || (opAlias && liveValues[opAlias]) || null;
+
         let valHtml = '';
-        if(opLv && !opLv.error){
-          const fmt = formatDisplayValue(normOp, opLv, rungProg);
-          const v = opLv.value;
-          const cls = Array.isArray(v) ? 'num'
-            : v===1||v===true ? 'on'
-            : v===0||v===false ? 'off' : 'num';
-          valHtml = `<span class="tt-ops-val ${cls}" style="color:${fmt.color}">${fmt.text}</span>`;
+        if(isBinaryWordAddr(normOp)){
+          // Binary word address: show Bin + Dec. The word itself is one atomic read;
+          // the bits may be only the few the ladder names, so they are the fallback.
+          const wordV = (opLvResolved && !opLvResolved.error) ? opLvResolved.value : null;
+          const assembled = Number.isInteger(wordV) ? (wordV & 0xFFFF) : assembleBinaryWord(normOp);
+          if(assembled !== null){
+            const binStr = toBin16(assembled);
+            valHtml = `<span class="tt-ops-val num">Bin: ${binStr}</span>`;
+            valHtml += `<span class="tt-ops-val num" style="margin-left:4px">(Dec: ${assembled})</span>`;
+          } else {
+            valHtml = `<span class="tt-ops-val" style="color:var(--text3)">= ?</span>`;
+          }
+        } else if(opInfo?.dimensions && !normOp.includes('[')){
+          // Array tag without index — no scalar value (RSLogix shows ??)
+          valHtml = `<span class="tt-ops-val" style="color:var(--text3)">??</span>`;
+        } else if(opLvResolved && !opLvResolved.error){
+          const v = opLvResolved.value;
+          const cls = v===1||v===true?'on': v===0||v===false?'off':'num';
+          // Show decimal value
+          valHtml = `<span class="tt-ops-val ${cls}">= ${lvText(v)}</span>`;
+          // Show raw format (binary/hex) if the original Radix differs
+          const rawVal = opInfo?.rawValue ? radixText(opInfo.rawValue, v) : '';
+          if(rawVal && rawVal !== String(v)){
+            valHtml += `<span class="tt-ops-val" style="color:var(--text3);font-size:9px;margin-left:4px">(${rawVal})</span>`;
+          }
         }
+        // Show alias target if exists
+        const aliasNote = opAlias ? `<span style="color:var(--text3);font-size:9px"> → ${opAlias}</span>` : '';
         html += `<div class="tt-ops-row">
           <span class="tt-ops-lbl">${lbl}</span>
-          <span class="tt-ops-addr">${op}</span>
+          <span class="tt-ops-addr">${op}${aliasNote}</span>
           ${valHtml}
         </div>`;
       } else {
+        // literal value — show decimal conversion for hex/bin/oct
         const litDec = parsePlcLiteral(op);
-        const needsConv = litDec !== null && !/^-?[\d.]+$/.test(op);
+        const needsConv = litDec !== null && !/^-?[\d.]+$/.test(op); // non-decimal format
         const convHtml = needsConv ? `<span class="tt-ops-val num">= ${litDec}</span>` : '';
         html += `<div class="tt-ops-row">
           <span class="tt-ops-lbl">${lbl}</span>
@@ -1544,7 +1978,7 @@ function showTT(h, cx, cy){
         </div>`;
       }
     });
-    currentRungProg = oldProg;
+    }
     opsEl.innerHTML = html;
     opsEl.style.display = 'block';
   } else {
@@ -1552,10 +1986,13 @@ function showTT(h, cx, cy){
     opsEl.style.display = 'none';
   }
 
-  tt.style.display='block';
-  tt.style.left = Math.min(cx+14, window.innerWidth-310)+'px';
-  tt.style.top = Math.min(cy-10, window.innerHeight-160)+'px';
+  // An empty line takes no room, whichever tooltip was on screen before this one
+  ['tt-s','tt-t','tt-d','tt-v'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.display = el.textContent ? '' : 'none';
+  });
 }
+// ── END TOOLTIP ──
 
 // ═══════════════════════════════════════════════════════
 //  DRAW HELPERS
@@ -1690,12 +2127,12 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
       const srcOps=inst.operands.slice(0,-1);
       ctx.font=`bold ${Math.max(6,8*z)}px Consolas`;ctx.fillStyle=col;ctx.fillText(inst.t,sc.x,sc.y-10*z);
       if(z>0.40){
-        const srcVals=srcOps.map(op=>{const lit=parsePlcLiteral(op);if(lit!==null)return String(lit);const rv=resolveLV(op);if(rv&&rv.value!==undefined)return String(rv.value);return'?';});
+        const srcVals=srcOps.map(op=>{const lit=parsePlcLiteral(op);if(lit!==null)return String(lit);const rv=resolveLV(op);if(rv&&rv.value!==undefined)return lvText(rv.value);return'?';});
         const valFs=Math.max(6,8*z),valCol='#90b0c0';
         if(srcOps.length===1){ctx.font=`bold ${valFs}px Consolas`;ctx.fillStyle=valCol;ctx.fillText(srcVals[0].slice(0,10),sc.x,sc.y+1*z);}
         else{const opSym=inst.t==='ADD'?'+':inst.t==='SUB'?'−':inst.t==='MUL'?'×':inst.t==='DIV'?'÷':inst.t==='MOD'?'%':',';ctx.font=`bold ${valFs}px Consolas`;ctx.fillStyle=valCol;ctx.fillText((srcVals[0].slice(0,6)+' '+opSym+' '+srcVals[1].slice(0,6)).slice(0,16),sc.x,sc.y+1*z);}
       }
-      if(lv&&isNum&&z>0.45){ctx.font=`${Math.max(5,7*z)}px Consolas`;ctx.fillStyle='#4a9effcc';ctx.fillText('→'+String(lv.value).slice(0,8),sc.x,sc.y+12*z);}
+      if(lv&&isNum&&z>0.45){ctx.font=`${Math.max(5,7*z)}px Consolas`;ctx.fillStyle='#4a9effcc';ctx.fillText('→'+lvText(lv.value).slice(0,8),sc.x,sc.y+12*z);}
     } else if((inst.t==='TON'||inst.t==='TOF'||inst.t==='RTO')&&z>0.4){
       ctx.font=`bold ${Math.max(6,8*z)}px Consolas`;ctx.fillStyle=isTiming?'#e09020':col;ctx.fillText(inst.t,sc.x,sc.y-8*z);
       const _tPfx=currentRungProg?`${currentRungProg}.`:'';
@@ -1745,7 +2182,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
 
     // Live value badge
     if(lv&&isNum){
-      const vs=lv.error?'ERR':String(lv.value).slice(0,8);
+      const vs=lv.error?'ERR':lvText(lv.value).slice(0,8);
       const lvY=by+boxH+12*z;
       const pillW=ctx.measureText(vs).width+6*z;
       ctx.fillStyle=lv.error?'#3a1800':'#0a1e38';ctx.strokeStyle=lv.error?'#c07030':'#4a9eff';ctx.lineWidth=0.8*z;
@@ -2026,12 +2463,8 @@ canvas.addEventListener('mousemove', e=>{
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
   const prev = hovHit;
   hovHit = hitTest(mx, my);
-  // Show tooltip when paused (or always — useful for inspecting values)
-  if(!playing){
-    showTT(hovHit, e.clientX, e.clientY);
-  } else {
-    showTT(null, 0, 0);
-  }
+  // Same as the tracer: a block shows its tooltip whether playback runs or not
+  showTT(hovHit, e.clientX, e.clientY);
   if(prev !== hovHit) drawGraph();
 });
 

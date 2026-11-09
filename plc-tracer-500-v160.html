@@ -63,6 +63,18 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 .lp-btn.go:hover{background:#103025;}
 .lp-btn.cancel{background:var(--bg3);border-color:var(--border);color:var(--text2);}
 #lp-status{font-family:var(--mono);font-size:11px;color:var(--text3);margin-top:10px;min-height:16px;}
+.lp-sess-list{border:1px solid var(--border);background:var(--bg);border-radius:2px;max-height:136px;overflow-y:auto;}
+.lp-sess{display:flex;align-items:center;gap:8px;padding:6px 9px;cursor:pointer;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--text);}
+.lp-sess:last-child{border-bottom:none;}
+.lp-sess:hover{background:var(--bg3);}
+.lp-sess.sel{background:#0a2018;color:var(--acc);}
+.lp-sess-dot{width:7px;height:7px;border-radius:50%;background:var(--red);flex-shrink:0;}
+.lp-sess-dot.on{background:var(--acc);}
+.lp-sess-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.lp-sess-meta{font-family:var(--mono);font-size:10px;color:var(--text3);white-space:nowrap;}
+.lp-sess-empty{padding:7px 9px;font-family:var(--mono);font-size:10px;color:var(--text3);}
+.lp-refresh{float:right;cursor:pointer;color:var(--text3);letter-spacing:.06em;}
+.lp-refresh:hover{color:var(--acc);}
 
 /* ── UPLOAD ── */
 #upload-zone{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;}
@@ -353,6 +365,11 @@ header{background:var(--bg2);border-bottom:2px solid var(--acc);padding:0 14px;h
 <div id="live-panel" class="hidden">
   <div class="lp-box">
     <div class="lp-title">⚡ LIVE — SLC 500 / MicroLogix Bridge</div>
+    <div class="lp-row">
+      <div class="lp-label">ACTIVE BRIDGE CONNECTIONS<span class="lp-refresh" id="lp-refresh" title="Re-scan the bridge">⟳ REFRESH</span></div>
+      <div class="lp-sess-list" id="lp-sess-list"></div>
+      <div class="lp-note">Click a controller to select its port, double-click to connect.</div>
+    </div>
     <div class="lp-row">
       <div class="lp-label">WEBSOCKET URL</div>
       <input class="lp-input" id="lp-url" value="ws://localhost:8765" spellcheck="false">
@@ -673,19 +690,26 @@ function snapState(){
   // Filtered to non-empty entries to keep the .ndrec file small.
   const symsSnap = {};
   if(graphData && graphData.nodes){
-    const addAddr = (addr, rungProg) => {
+    const addAddr = (addr, rungProg, isOperand) => {
       if(!addr || symsSnap[addr]) return;
       const qualKey   = rungProg ? `${rungProg}.${addr}` : null;
       const info      = (qualKey && P?.syms[qualKey]) || P?.syms[addr];  // L5X (qualified) + SLC inline
       const descEntry = getDesc(addr);                                    // SLC .SY6 / .PRN
       const sym  = info?.sym  || descEntry?.sym  || '';
       const desc = info?.desc || descEntry?.desc || '';
-      if(sym || desc) symsSnap[addr] = {sym, desc};
+      // L5X only: what the player's tooltip prints the way the tracer does
+      const extra = {};
+      ['dataType','aliasFor','rawValue','dimensions'].forEach(k => { if(info?.[k]) extra[k] = info[k]; });
+      const any = Object.keys(extra).length > 0;
+      if(isOperand ? any : (sym || desc || any)) symsSnap[addr] = {sym, desc, ...extra};
     };
     graphData.nodes.forEach(n => {
       if(n.kind === 'rung' && n.rung && n.rung.ins){
         const rungProg = (n.rung.file || '').split('/')[0];
-        n.rung.ins.forEach(i => addAddr(i.g, rungProg));
+        n.rung.ins.forEach(i => {
+          addAddr(i.g, rungProg);
+          instOperandTags(i).forEach(op => addAddr(normalizeAddr(op), rungProg, true));
+        });
       } else if(n.tagName){   // inter / equ_target / leaf / physical / root
         addAddr(n.tagName, null);
       }
@@ -950,6 +974,83 @@ const IN_I  = new Set(['XIC','XIO','OSR','OSF','ONS']);
 // Math instructions: last operand is destination (written)
 // NOTE: CPT excluded — its dest is the FIRST operand, handled separately in extractInsSLC
 const MATH_DEST_I=new Set(['MOV','ADD','SUB','MUL','DIV','MOD','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','SCP','SCL','TOD','FRN']);
+
+// ── FIFO / LIFO stack instructions (FFL/FFU/LFL/LFU) ───────────────────
+// The operand order differs between the loaders and the unloaders. Getting it
+// wrong silently swaps the data word with the stack pointer, so this table is
+// the single source of truth for every consumer (parser, renderer, tooltip,
+// context menu, watch list):
+//
+//   FFL / LFL   Source  Stack  Control  Length  Position
+//   FFU / LFU   Stack   Dest   Control  Length  Position
+//
+// Both are OUTPUT instructions: they terminate the rung and pass no power to
+// their right. The EN/EU/DN/EM legs RSLogix draws on the box are indicators of
+// the CONTROL bits, not power taps.
+//
+// Each instruction is edge triggered through its own bit in the CONTROL word —
+// .EN (bit 15) for the loaders, .EU (bit 14) for the unloaders — which is what
+// lets an FFL/FFU pair share a single R6 element.
+const FIFO_I      = new Set(['FFL','FFU','LFL','LFU']);
+const FIFO_LOAD_I = new Set(['FFL','LFL']);
+// CONTROL (R6) status word, in the bit order RSLogix 500 prints in a data table.
+// Bit number is 15 - index: EN=15, EU=14, DN=13, EM=12, ER=11, UL=10, IN=9, FD=8.
+const FIFO_BITS   = ['EN','EU','DN','EM','ER','UL','IN','FD'];
+
+// Split a FIFO/LIFO instruction into named parts. Returns null for anything else.
+function fifoParts(inst){
+  if(!inst || !FIFO_I.has(inst.t)) return null;
+  const o = inst.operands || [];
+  const load = FIFO_LOAD_I.has(inst.t);
+  return {
+    load,
+    stackLbl: (inst.t==='LFL'||inst.t==='LFU') ? 'LIFO' : 'FIFO',
+    src   : load ? (o[0]||'') : '',        // word read into the stack
+    dst   : load ? '' : (o[1]||''),        // word written out of the stack
+    stack : load ? (o[1]||'') : (o[0]||''),// stack base (file pointer, # stripped)
+    ctl   : o[2] ? normalizeAddr(o[2]) : '',
+    lenOp : o[3]||'',
+    posOp : o[4]||'',
+    enBit : load ? 'EN' : 'EU'
+  };
+}
+
+// Live .LEN / .POS of the CONTROL structure. RSLogix bakes both into the rung
+// text as trailing literals, so those stand in whenever nothing is connected.
+function fifoCtlNum(ctl, sub, literal){
+  if(ctl){
+    const lv = resolveLV(`${ctl}.${sub}`) || resolveLV(`${ctl}/${sub}`);
+    if(lv && !lv.error && lv.value !== undefined && lv.value !== null){
+      const n = Number(lv.value);
+      if(!isNaN(n)) return n;
+    }
+  }
+  const n = parsePlcLiteral(literal);
+  return n !== null ? Number(n) : null;
+}
+
+// One CONTROL status bit, accepting both R6:0/DN and R6:0.DN spellings.
+// null means "not known" — distinct from a known 0.
+function fifoCtlBit(ctl, bit){
+  if(!ctl) return null;
+  const lv = resolveLV(`${ctl}/${bit}`) || resolveLV(`${ctl}.${bit}`);
+  return (lv && !lv.error && lv.value !== undefined && lv.value !== null) ? (lv.value ? 1 : 0) : null;
+}
+
+// "#N9:0" + LEN -> the concrete stack words N9:0 … N9:<LEN-1>. The bridge
+// cannot read a file pointer, and nothing else in the program names these
+// words, so the expansion has to happen on this side.
+function fifoStackAddrs(stack, len){
+  const base = stripHash(stack||'');
+  const m = base.match(/^([A-Za-z]+\d*):(\d+)$/);
+  if(!m || !len || len < 1) return [];
+  const n = Math.min(len, 128);          // an SLC stack tops out at 128 elements
+  const first = parseInt(m[2], 10);
+  const out = [];
+  for(let i=0;i<n;i++) out.push(`${m[1]}:${first+i}`);
+  return out;
+}
+
 function parseAddrRole(inst){
   if(OUT_I.has(inst))return'out';
   if(MATH_DEST_I.has(inst))return'out';
@@ -957,6 +1058,7 @@ function parseAddrRole(inst){
   if(inst==='IOM')return'out';
   if(['TON','TOF','RTO','CTU','CTD','RES','PID'].includes(inst))return'both';
   if(['COP','FLL'].includes(inst))return'out';
+  if(FIFO_I.has(inst))return'both';   // reads and writes its CONTROL structure
   return'in';
 }
 
@@ -1200,6 +1302,36 @@ function extractInsSLC(text){
           result.push({t:inst, g:normalizeAddr(addr), r:inst==='IOM'?'out':'in', operands});
         }
         continue;
+      }
+      // ── FFL/FFU/LFL/LFU: FIFO/LIFO load & unload ──
+      // The primary address is the CONTROL structure — that is what identifies
+      // the stack and what both halves of a pair have in common, so clicking
+      // either block cross-references the other.
+      // The words actually moved live elsewhere and would otherwise never be
+      // indexed: an unloader's destination had no writer at all, which is why
+      // tracing back from it dead-ended. They are declared through
+      // extraWrites/extraReads, which buildIndex folds into the tag index.
+      if(FIFO_I.has(inst)&&operands.length>=3){
+        const ops=operands.map(stripHash);
+        const ctl=ops[2];
+        if(looksLikeAddr(ctl)){
+          const load=FIFO_LOAD_I.has(inst);
+          const stack=load?ops[1]:ops[0];
+          const moved=load?ops[0]:ops[1];   // Source for a load, Dest for an unload
+          const rec={t:inst, g:normalizeAddr(ctl), r:'both', operands:ops};
+          const writes=[], reads=[];
+          // Stack words are rewritten by both halves — a load stores into
+          // FIFO[POS], an unload shifts every remaining element down.
+          if(looksLikeAddr(stack)){
+            const len=parseInt(ops[3],10);
+            fifoStackAddrs(stack,len).forEach(a=>writes.push(normalizeAddr(a)));
+          }
+          if(looksLikeAddr(moved)) (load?reads:writes).push(normalizeAddr(moved));
+          if(writes.length) rec.extraWrites=writes;
+          if(reads.length)  rec.extraReads=reads;
+          result.push(rec);
+          continue;
+        }
       }
       // For MATH_DEST_I (MOV/ADD/SCP/SCL/TOD etc.) the destination is the LAST operand
       // For all others the first operand is the address
@@ -2267,6 +2399,11 @@ function buildIndex(proj){
       if(i.r === 'label') return; // JMP/LBL labels are not tag addresses
       const g=normalizeAddr(i.g);
       addEntry(g,rg,i.r);
+      // Instructions whose moved words are not the primary address declare them
+      // here (FFL/FFU stack elements, an unloader's destination). Without this
+      // an FFU destination has no writer in the index and the trace dead-ends.
+      if(i.extraWrites) i.extraWrites.forEach(a=>addEntry(normalizeAddr(a),rg,'out'));
+      if(i.extraReads)  i.extraReads.forEach(a=>addEntry(normalizeAddr(a),rg,'in'));
       // L5X: bit-level access "Tag.N" — also register under parent word "Tag"
       // so that EQU(Tag,0) / load_src / graph traversal can find bit-level writes
       if(proj.isL5X){
@@ -2540,6 +2677,13 @@ function parseRungTextTree(text){
       g = ops[0];
       g = normalizeAddr(g);
       return {type:'inst', inst:{t:mnem, g, r:mnem==='IOM'?'out':'in', operands:ops}};
+    }
+    // ── FFL/FFU/LFL/LFU: primary address is the CONTROL structure ──
+    // Keep this in step with extractInsSLC, or the drawn cell and the tag index
+    // disagree about which address the block belongs to.
+    if(FIFO_I.has(mnem) && ops.length >= 3 && looksLikeAddr(ops[2])){
+      g = normalizeAddr(ops[2]);
+      return {type:'inst', inst:{t:mnem, g, r:'both', operands:ops}};
     }
     // LIM LowLimit Test HighLimit — primary address is Test (ops[1])
     if(mnem === 'LIM' && ops.length >= 2){
@@ -3220,7 +3364,7 @@ function parsePlcLiteral(s){
 //  DRAW ONE CONTACT / COIL CELL
 // ═══════════════════════════════════════════════════════
 // OUT_I declared above in parsers section
-const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI']);
+const BIG_I = new Set(['TON','TOF','RTO','CTU','CTD','RES','EQU','GRT','LES','GEQ','LEQ','NEQ','LIM','MEQ','MOV','ADD','SUB','MUL','DIV','MOD','CPT','CLR','SQR','NEG','ABS','AND','OR','XOR','NOT','COP','CPS','FLL','MSG','GSV','SSV','SCP','SCL','TOD','FRN','PID','IIM','IOM','DTOS','SRT','SWPB','MVM','TND','BTD','SIZE','RET','AFI','FFL','FFU','LFL','LFU']);
 
 // ── Resolve live value for a tag, following alias link if needed ──
 function resolveLV(tagName){
@@ -3432,6 +3576,15 @@ function _cellStateCore(inst){
   // AFI never conducts, and it has no tag to look up — it has to answer
   // before the lookup below, which would return null and draw it grey.
   if(inst.t === 'AFI') return 'off';
+  // FFL/FFU/LFL/LFU — the block is lit while its own edge-memory bit is set
+  // (.EN for the loaders, .EU for the unloaders), which is what RSLogix shows.
+  // The primary address is the CONTROL structure, whose scalar value is a
+  // bit-packed status word and would otherwise be read as a number.
+  if(FIFO_I.has(inst.t)){
+    const _fp = fifoParts(inst);
+    const _eb = _fp ? fifoCtlBit(_fp.ctl, _fp.enBit) : null;
+    return _eb === null ? null : (_eb ? 'on' : 'off');
+  }
   const lv = resolveLV(inst.g);
   if(!lv || lv.error){
     if(_d) console.log(`%c[cellState] "${inst.g}" t=${inst.t} → null (lv=${lv ? 'error:'+lv.error : 'undefined'})` +
@@ -3592,10 +3745,13 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
   // ── Compute state ──
   // AOI blocks may not have a direct liveValue but their sub-members (.EnableOut) do
   const _aoiBlock = inst.t.startsWith('AOI_');
+  // A FIFO block's state comes from a CONTROL status bit, not from a scalar
+  // value on its own address, so it must not be gated on lv either.
+  const _fifoBlock = FIFO_I.has(inst.t);
   // AFI is false with or without a PLC connection, so it is not gated on
   // hasLive — an offline rung must already show that it is dead.
   const state = (inst.t === 'AFI') ? 'off'
-              : (hasLive && (lv || _aoiBlock)) ? (cellState(inst)||'null') : 'null';
+              : (hasLive && (lv || _aoiBlock || _fifoBlock)) ? (cellState(inst)||'null') : 'null';
 
   // ── Debug draw trace (verbose only; logs first frame + every 60th frame to avoid flooding) ──
   if(_isDbgVerbose(inst.g) && (_dbgFrameN <= 1 || _dbgFrameN % 60 === 1)){
@@ -3895,7 +4051,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
           const lit = parsePlcLiteral(op);
           if(lit !== null) return String(lit);
           const rv = resolveLV(op);
-          if(rv && rv.value !== undefined) return String(rv.value);
+          if(rv && rv.value !== undefined) return lvText(rv.value);
           return '?';
         });
         const valFs = Math.max(6, 8*z);
@@ -3925,7 +4081,46 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
       if(lv && isNum && z > 0.45){
         ctx.font=`${Math.max(5,7*z)}px Consolas`;
         ctx.fillStyle='#4a9effcc';
-        ctx.fillText('→'+String(lv.value).slice(0,8), sc.x, sc.y + 12*z);
+        ctx.fillText('→'+lvText(lv.value).slice(0,8), sc.x, sc.y + 12*z);
+      }
+    } else if(FIFO_I.has(inst.t) && z > 0.35){
+      // ── FIFO/LIFO block: the word being moved, plus POS/LEN ──
+      const fp = fifoParts(inst);
+      ctx.font=`bold ${Math.max(6,8*z)}px Consolas`;
+      ctx.fillStyle = col;
+      ctx.fillText(inst.t, sc.x, sc.y - 12*z);
+      const fLen = fifoCtlNum(fp.ctl,'LEN',fp.lenOp);
+      const fPos = fifoCtlNum(fp.ctl,'POS',fp.posOp);
+      if(z > 0.42){
+        // Direction marker + the value crossing the boundary this scan:
+        // Source for a loader, Destination for an unloader.
+        const moved = fp.load ? fp.src : fp.dst;
+        const mlv   = moved ? resolveLV(moved) : null;
+        const mtxt  = (mlv && !mlv.error && mlv.value !== undefined && mlv.value !== null) ? String(mlv.value) : '?';
+        ctx.font=`bold ${Math.max(6,8*z)}px Consolas`;
+        ctx.fillStyle='#90b0c0';
+        ctx.fillText(`${fp.load?'\u25bc':'\u25b2'} ${mtxt}`.slice(0,12), sc.x, sc.y - 3*z);
+        // POS / LEN — amber when the stack is full, dim when it is empty
+        ctx.font=`${Math.max(5,7*z)}px Consolas`;
+        ctx.fillStyle = (fPos!==null && fLen && fPos>=fLen) ? '#e09020'
+                      : (fPos===0) ? '#607080' : '#4a9effcc';
+        ctx.fillText(`${fPos===null?'?':fPos}/${fLen===null?'?':fLen}`, sc.x, sc.y + 6*z);
+      } else {
+        ctx.font=`${Math.max(5,7*z)}px Consolas`;
+        ctx.fillStyle=col+'bb';
+        ctx.fillText((((P&&P.isL5X)?'':'#')+stripHash(fp.stack)).slice(0,10), sc.x, sc.y + 4*z);
+      }
+      // Status strip — indicators of the CONTROL bits this instruction drives.
+      // Not power taps: the block terminates the rung like a coil.
+      if(z > 0.55){
+        const legs = [fp.enBit, 'DN', 'EM'];
+        ctx.font=`${Math.max(4,5.5*z)}px Consolas`;
+        const anyKnown = legs.some(b=>fifoCtlBit(fp.ctl,b)!==null);
+        ctx.fillStyle = anyKnown ? '#7a8a98' : '#4a5a68';
+        ctx.fillText(legs.map(b=>{
+          const v = fifoCtlBit(fp.ctl,b);
+          return `${b}${v===null?'?':v?'\u25cf':'\u00b7'}`;
+        }).join(' '), sc.x, sc.y + 13*z);
       }
     } else if((inst.t==='TON'||inst.t==='TOF'||inst.t==='RTO') && z > 0.4){
       // Timer: show ACC/PRE progress bar
@@ -4005,7 +4200,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
         const valCol = '#90b0c0';
         ctx.font=`${valFs}px Consolas`;
         ctx.fillStyle = valCol;
-        const fmtVal = v => typeof v==='number' ? (Number.isInteger(v)?String(v):v.toFixed(1)) : String(v);
+        const fmtVal = v => typeof v==='number' ? (Number.isInteger(v)?String(v):v.toFixed(1)) : lvText(v);
         if(subs[0]) ctx.fillText(`${subs[0].name}=${fmtVal(subs[0].val)}`.slice(0,14), sc.x, sc.y + 1*z);
         if(subs[1]) ctx.fillText(`${subs[1].name}=${fmtVal(subs[1].val)}`.slice(0,14), sc.x, sc.y + 10*z);
       }
@@ -4116,7 +4311,7 @@ function drawCell(hit, sceneOx, sceneOy, isHov, isSel){
 
     // ── Live value badge (numeric N/F types only — bit types shown via colour) ──
     if(lv && isNum){
-      const vs = lv.error?'ERR':String(lv.value).slice(0,8);
+      const vs = lv.error?'ERR':lvText(lv.value).slice(0,8);
       const hasSym = z>0.45 && P?.syms[inst.g]?.sym;
       const lvY = by+boxH + (hasSym ? 22*z : 12*z);
       // pill background
@@ -4918,6 +5113,36 @@ function drawCtxMenu(){
   if(inst.t === 'LBL' && lblJmpRungs.length){
     items.push({label:`⊕ Load JMP  (${lblJmpRungs.length})`, action:'load_lbl_jmp', col:'#80a0c0'});
   }
+  // ── FFL/FFU/LFL/LFU: follow the queue in either direction ──
+  // These are output instructions, so the generic per-operand block below is
+  // skipped for them; every entry a FIFO block needs is built here instead.
+  if(FIFO_I.has(inst.t)){
+    const fp   = fifoParts(inst);
+    const fLen = fifoCtlNum(fp.ctl,'LEN',fp.lenOp);
+    const qAddrs = fifoStackAddrs(fp.stack, fLen).map(normalizeAddr);
+    // The other half of the pair: same CONTROL structure, opposite direction.
+    const pairRungs = (P?.rungs||[]).filter(rg=>rg.ins.some(i=>
+      FIFO_I.has(i.t) && normalizeAddr(i.g)===fp.ctl && FIFO_LOAD_I.has(i.t)!==fp.load));
+    // Where the queued value comes from (loader) …
+    const srcAddr   = fp.load ? normalizeAddr(fp.src||'') : '';
+    const srcWrites = srcAddr ? ((P?.tagIndex[srcAddr]?.writes)||[]) : [];
+    // … and who acts on it once it comes back out (unloader).
+    const dstAddr   = fp.load ? '' : normalizeAddr(fp.dst||'');
+    const consumers = dstAddr ? ((P?.tagIndex[dstAddr]?.reads)||[]) : [];
+    if(pairRungs.length)
+      items.push({label:`⊕ ${fp.load?'Unload':'Load'} pair: ${fp.ctl}  (${pairRungs.length})`,
+                  action:'load_fifo', col:'#40d0c0', opAddr:fp.ctl, rungs:pairRungs});
+    if(srcWrites.length)
+      items.push({label:`⊕ Source: ${srcAddr}  (${srcWrites.length})`,
+                  action:'load_fifo', col:'#4a9eff', opAddr:srcAddr, rungs:srcWrites});
+    if(consumers.length)
+      items.push({label:`⊕ Dest consumers: ${dstAddr}  (${consumers.length})`,
+                  action:'load_fifo', col:'#b080e0', opAddr:dstAddr, rungs:consumers});
+    if(qAddrs.length)
+      items.push({label:`🔍 Queue words: ${qAddrs[0]}…${qAddrs[qAddrs.length-1]}`,
+                  action:'fifo_xref', col:'#f0d060', addrs:qAddrs, stackLbl:fp.stackLbl, stackBase:stripHash(fp.stack)});
+  }
+
   // Standard source load for input instructions
   // Universal: for ANY instruction with 2+ operands, show separate menu items
   // per non-constant operand that has write sources in the program
@@ -5116,15 +5341,32 @@ function fitGraph(){
 function execMenuAction(action){
   const {hit,scene,_selectedItem}=ctxMenu;
   const inst=hit.inst;
-  // For load_src_op, use the operand address from the menu item; otherwise use primary address
-  const addr = (action==='load_src_op' && _selectedItem?.opAddr) ? normalizeAddr(_selectedItem.opAddr) : inst.g;
-  const clickedAddr = (action==='load_src_op' && _selectedItem?.opAddr) ? normalizeAddr(_selectedItem.opAddr) : inst.g;
+  // For load_src_op / load_fifo, use the address carried by the menu item;
+  // otherwise use the instruction's primary address
+  const _opSel = (action==='load_src_op' || action==='load_fifo') && _selectedItem?.opAddr;
+  const addr = _opSel ? normalizeAddr(_selectedItem.opAddr) : inst.g;
+  const clickedAddr = _opSel ? normalizeAddr(_selectedItem.opAddr) : inst.g;
   ctxMenu=null;
 
   if(action==='close') { drawGraph(); return; }
 
   if(action==='help'){
     showInstructionHelp(inst.t);
+    drawGraph(); return;
+  }
+
+  // ── Queue words: cross-reference every element the stack occupies ──
+  // One row per instruction, not per word: a FIFO block touches all of them.
+  if(action==='fifo_xref'){
+    const qa = _selectedItem?.addrs || [];
+    const seen = new Map();
+    qa.forEach(a=>usagesFor(a).forEach(u=>{
+      const k = `${u.rg.file}#${u.rg.rungNum}|${u.inst.t}|${u.inst.g}|${u.role}`;
+      if(!seen.has(k)) seen.set(k, u);
+    }));
+    showUsagesInPanel(qa[0] || inst.g, [...seen.values()],
+      `${_selectedItem?.stackLbl||'QUEUE'} #${_selectedItem?.stackBase||''} · ${qa.length} words`,
+      qa.join(', '));
     drawGraph(); return;
   }
 
@@ -5192,12 +5434,16 @@ function execMenuAction(action){
     return;
   }
 
-  if(action==='load_src' || action==='load_main_func' || action==='load_res' || action==='load_src_op'){
+  if(action==='load_src' || action==='load_main_func' || action==='load_res' || action==='load_src_op' || action==='load_fifo'){
     const TIMER_CTR_MAIN = new Set(['TON','TOF','RTO','CTU','CTD']);
     let targetRungs;
     const parentAddr=getParentAddr(addr);
 
-    if(action==='load_main_func'){
+    if(action==='load_fifo'){
+      // The rung set was resolved when the menu was built (pair / Source
+      // writers / Dest consumers) — reuse it verbatim.
+      targetRungs = _selectedItem?.rungs || [];
+    } else if(action==='load_main_func'){
       // RES clicked → load only TON/TOF/RTO/CTU/CTD rungs (the main timer/counter definition)
       const allWrites = (P?.tagIndex[addr]?.writes)||[];
       let combined = [...allWrites];
@@ -5300,15 +5546,9 @@ function execMenuAction(action){
       });
       showUsagesInPanel(norm, pusages, labelName, '');
     } else {
-      const pidx = P?.tagIndex[norm] || {writes:[], reads:[]};
-      pidx.writes.forEach(rg=>{
-        rg.ins.filter(i=>(i.r==='out'||i.r==='both')&&normalizeAddr(i.g)===norm)
-          .forEach(i=>pusages.push({rg, inst:i, role:'write'}));
-      });
-      pidx.reads.forEach(rg=>{
-        rg.ins.filter(i=>i.r==='in'&&normalizeAddr(i.g)===norm)
-          .forEach(i=>pusages.push({rg, inst:i, role:'read'}));
-      });
+      // usagesFor also catches instructions that reach the address through
+      // extraWrites/extraReads (an FFU destination, FFL/FFU stack words)
+      pusages = usagesFor(norm);
       const pinfo = P?.syms[norm];
       const pdesc = getDesc(norm);
       showUsagesInPanel(norm, pusages, pinfo?.sym||pdesc?.sym||'', pinfo?.desc||pdesc?.desc||'');
@@ -5600,6 +5840,111 @@ window.addEventListener('keydown',e=>{
 });
 
 // ── TOOLTIP ──
+// One tooltip for every block: this whole block, down to END TOOLTIP, is byte for
+// byte the same in PLC-tracer-HMI.html, plc-tracer-500-v160.html and
+// PLC_Tracer_Player.html (test_tooltip_same.js). The player supplies P, getDesc and
+// the address helpers from its recording, so nothing here knows which page it is in.
+//
+// Timer time base. SLC 500 / MicroLogix keep it in the instruction itself
+// (TON T4:1 1.0 10 0 → 1.0 s; bit 9 of the control word mirrors it), so it is
+// known offline. Logix has no time base: TIMER .PRE/.ACC always count ms.
+const TIMER_BASE_I = new Set(['TON','TOF','RTO','TONR','TOFR','RTOR']);
+function timerBase(t, ops){
+  if(!TIMER_BASE_I.has(t)) return null;
+  if(P && P.isL5X) return {sec:0.001, txt:'0.001 s', note:'1 ms, fixed'};
+  const op = ops && ops[1];
+  // Only a genuine base — a short "TON T4:0 3000" must not read its preset as one
+  if(typeof op !== 'string' || !op.includes('.') || ![1, 0.01, 0.001].includes(parseFloat(op))) return null;
+  return {sec:parseFloat(op), txt:`${op} s`, note:''};
+}
+// "(10 s)" after a PRE/ACC value; '' when the base or the value is unknown.
+// toFixed(3) drops float noise (100 × 0.001) — no base is finer than 1 ms.
+function timerSecsNote(lv, tb){
+  const v = lv && !lv.error ? lv.value : null;
+  const n = (v === null || v === undefined || v === '') ? NaN : Number(v);
+  if(!tb || !isFinite(n)) return '';
+  return `<span class="tt-ops-val" style="color:var(--text3);font-size:9px;margin-left:4px">(${+(n * tb.sec).toFixed(3)} s)</span>`;
+}
+
+// ── One value format, online and offline ──
+// The same tag arrives as true/false from the bridge and as 1/0 from a PRN or L5X
+// file. A bare SLC structure arrives as {CTL,PRE,ACC} or {CTL,LEN,POS} online, but
+// as a plain number from a PRN and as "PRE:x ACC:y" from an L5X. Every text that
+// prints a value goes through these helpers, so it reads the same in all of them.
+const TT_TC_I = new Set(['TON','TOF','RTO','TONR','TOFR','RTOR','CTU','CTD','CTUD']);
+
+// A sub-member of a structure, in both spellings: the bridge answers T4:0.DN, a
+// PRN stores T4:0/DN. null when it is unknown or came back with a read error.
+function tagSubLV(addr, sub, prog){
+  const saved = currentRungProg;
+  if(prog) currentRungProg = prog;
+  const lv = resolveLV(`${addr}.${sub}`) || resolveLV(`${addr}/${sub}`);
+  currentRungProg = saved;
+  return (lv && !lv.error && lv.value !== undefined && lv.value !== null) ? lv : null;
+}
+
+// 'tc' = TIMER or COUNTER element, 'ctl' = CONTROL element, null = anything else.
+function lvStructKind(addr, prog, instType){
+  if(TT_TC_I.has(instType)) return 'tc';
+  if(FIFO_I.has(instType))  return 'ctl';
+  if(!addr) return null;
+  if(P && P.isL5X){
+    const q  = prog && !addr.startsWith(prog + '.') ? `${prog}.${addr}` : null;
+    const dt = String(((q && P.syms[q]) || P.syms[addr] || {}).dataType || '').toUpperCase();
+    return (dt === 'TIMER' || dt === 'COUNTER') ? 'tc' : dt === 'CONTROL' ? 'ctl' : null;
+  }
+  return /^[TC]\d*:\d+$/i.test(addr) ? 'tc' : /^R\d*:\d+$/i.test(addr) ? 'ctl' : null;
+}
+
+// One raw value as text: a bit is 1/0, a structure from the bridge is its DN bit
+// (bit 13 of the control word) or POS/LEN.
+function lvText(v){
+  if(v === true || v === false) return v ? '1' : '0';
+  if(Array.isArray(v)) return `[${v.length} bytes]`;
+  if(v && typeof v === 'object'){
+    if(v.PRE !== undefined) return String((v.CTL >> 13) & 1);
+    if(v.LEN !== undefined) return `${v.POS}/${v.LEN}`;
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
+// The radix a tag was exported in (16#0000_0079), applied to the value it has now:
+// the text in the L5X file is only right until the value changes.
+function radixText(raw, v){
+  const m = /^(16|2|8)#([0-9A-Fa-f_]+)$/.exec(String(raw));
+  const n = (v === true || v === false) ? (v ? 1 : 0) : Number(v);
+  if(!m || !Number.isInteger(n)) return String(raw);
+  const base = +m[1], parts = m[2].split('_'), width = parts.join('').length;
+  const bits = base === 16 ? width * 4 : base === 8 ? width * 3 : width;
+  let s = (n < 0 ? n + Math.pow(2, Math.min(bits, 32)) : n).toString(base).padStart(width, '0');
+  if(/[A-F]/.test(m[2])) s = s.toUpperCase();
+  if(parts.length > 1){   // same digit grouping as the export
+    const size = parts[parts.length - 1].length;
+    s = s.replace(new RegExp(`\\B(?=(.{${size}})+$)`, 'g'), '_');
+  }
+  return `${base}#${s}`;
+}
+
+// What a tag shows where there is room for a single value: tooltip line, right
+// panel, tag list, rung card, player TAGS. A timer or counter is its DN bit, the
+// way a PRN snapshot already stores it; a CONTROL element is POS/LEN. null = nothing
+// known yet.
+function tagValueText(addr, lv, prog, instType){
+  const v = lv ? lv.value : undefined;
+  if(v && typeof v === 'object' && !Array.isArray(v)) return lvText(v);
+  const kind = lvStructKind(addr, prog, instType);
+  if(kind === 'tc'){
+    const dn = tagSubLV(addr, 'DN', prog);
+    return dn ? (dn.value ? '1' : '0') : null;
+  }
+  if(kind === 'ctl'){
+    const pos = tagSubLV(addr, 'POS', prog), len = tagSubLV(addr, 'LEN', prog);
+    return (pos && len) ? `${pos.value}/${len.value}` : null;
+  }
+  return (v === undefined || v === null) ? null : lvText(v);
+}
+
 function showTT(h,cx,cy){
   const tt=document.getElementById('tt');
   if(!h||!h.hit){tt.style.display='none';return;}
@@ -5616,7 +5961,30 @@ function showTT(h,cx,cy){
     tt.style.display='none'; return;
   }
   // Determine program scope from the rung this cell belongs to
-  const rungProg = h.scene?.rung?.file ? h.scene.rung.file.split('/')[0] : null;
+  ttFill(inst, h.scene?.rung?.file ? h.scene.rung.file.split('/')[0] : null);
+  ttPlace(cx, cy);
+}
+
+// Beside the cursor, moved back into the window when it would leave it.
+function ttPlace(cx, cy){
+  const tt = document.getElementById('tt');
+  tt.style.display = 'block';
+  const r = tt.getBoundingClientRect();
+  let L = cx + 14, T = cy - 10;
+  if(L + r.width  > window.innerWidth  - 8) L = cx - r.width - 10;
+  if(T + r.height > window.innerHeight - 8) T = window.innerHeight - r.height - 8;
+  tt.style.left = Math.max(4, L) + 'px';
+  tt.style.top  = Math.max(4, T) + 'px';
+}
+
+// Fills the tooltip for one block. Whatever hovers a block comes through here, so
+// a block reads the same on the ladder, on an HMI indicator and in the player.
+function ttFill(inst, rungProg){
+  const saved = currentRungProg;
+  currentRungProg = rungProg || null;
+  try { _ttFill(inst, rungProg); } finally { currentRungProg = saved; }
+}
+function _ttFill(inst, rungProg){
   const qualKey  = rungProg ? `${rungProg}.${inst.g}` : null;
   const info = (qualKey && P?.syms[qualKey]) || P?.syms[inst.g];
   const descEntry = getDesc(inst.g);
@@ -5654,14 +6022,32 @@ function showTT(h,cx,cy){
     } else {
       tv.textContent = '';
     }
+  } else if(FIFO_I.has(inst.t)){
+    // The primary address is the CONTROL structure, whose scalar value is a
+    // bit-packed status word — "= 4096" would be noise. Summarise the queue
+    // instead; the operand rows below carry the detail.
+    const _fp  = fifoParts(inst);
+    const _len = fifoCtlNum(_fp.ctl,'LEN',_fp.lenOp);
+    const _pos = fifoCtlNum(_fp.ctl,'POS',_fp.posOp);
+    if(_pos === null || _len === null){
+      tv.textContent = '';
+    } else {
+      tv.textContent = _pos === 0    ? `empty  (0 / ${_len})`
+                     : _pos >= _len  ? `FULL  (${_pos} / ${_len})`
+                     :                 `${_pos} queued  (${_pos} / ${_len})`;
+      tv.style.color = _pos === 0 ? 'var(--text3)' : _pos >= _len ? '#e09020' : 'var(--blue)';
+    }
   } else if(lv){
-    const dispVal = lv.error ? `ERR: ${lv.error}` : `= ${lv.value}`;
+    // A timer or counter prints no value line: the rows below already carry DN,
+    // PRE and ACC, and any single value would only repeat them. A read error shows.
+    const vt = (lv.error || TT_TC_I.has(inst.t)) ? null : tagValueText(inst.g, lv, rungProg, inst.t);
+    const dispVal = lv.error ? `ERR: ${lv.error}` : (vt === null ? '' : `= ${vt}`);
     // If value came from alias target, show that
     const fromAlias = !(qualKey && liveValues[qualKey]) && !liveValues[inst.g] && aliasFor && liveValues[aliasFor];
-    tv.textContent = fromAlias ? `${dispVal}  (via ${aliasFor})` : dispVal;
+    tv.textContent = (fromAlias && dispVal) ? `${dispVal}  (via ${aliasFor})` : dispVal;
     tv.style.color = lv.error ? '#c07030'
-      : (lv.value===1||lv.value==='1'||lv.value===true)  ? 'var(--green)'
-      : (lv.value===0||lv.value==='0'||lv.value===false) ? 'var(--red)'
+      : vt === '1' ? 'var(--green)'
+      : vt === '0' ? 'var(--red)'
       : 'var(--blue)';
     const tts = document.getElementById('tt-t');
     if(lv.prn)     tts.textContent = typeStr + ' · 📋 PRN';
@@ -5678,6 +6064,7 @@ function showTT(h,cx,cy){
                            'COP','CPS','FLL','MSG','GSV','SSV',
                            'SCP','SCL','TOD','FRN','PID','IIM','IOM',
                            'SWPB','MVM','DTOS','SRT','TND','NEG','ABS','SQR','CLR','BTD','SIZE',
+                           'FFL','FFU','LFL','LFU',
                            'CONCAT','DELETE','INSERT','MID','FIND','STOD','RTOS','STOR','LOWER','UPPER']);
   const ops = inst.operands || [];
   if(inst.t.startsWith('AOI_') && ops.length > 0){
@@ -5701,11 +6088,11 @@ function showTT(h,cx,cy){
       const sv = liveValues[k];
       const v = sv.value;
       const cls = v===1||v===true?'on': v===0||v===false?'off':'num';
-      html += `<div class="tt-ops-row"><span class="tt-ops-lbl">${sub}</span><span class="tt-ops-val ${cls}">= ${v}</span></div>`;
+      html += `<div class="tt-ops-row"><span class="tt-ops-lbl">${sub}</span><span class="tt-ops-val ${cls}">= ${lvText(v)}</span></div>`;
     }
     opsEl.innerHTML = html;
     opsEl.style.display = 'block';
-  } else if(BIG_TT.has(inst.t) && ops.length > 0){
+  } else if(TT_TC_I.has(inst.t) || (BIG_TT.has(inst.t) && ops.length > 0)){
     // Label mapping by instruction type
     const lbls = (()=>{
       if(['MOV'].includes(inst.t))           return ['Source','Dest'];
@@ -5714,8 +6101,8 @@ function showTT(h,cx,cy){
       if(['EQU','GRT','LES','GEQ','LEQ','NEQ'].includes(inst.t)) return ['Src A','Src B'];
       if(['LIM'].includes(inst.t))           return ['Low Lim','Test','High Lim'];
       if(['MEQ'].includes(inst.t))           return ['Source','Mask','Compare'];
-      if(['TON','TOF','RTO'].includes(inst.t)) return ['Timer','Preset','Accum'];
-      if(['CTU','CTD'].includes(inst.t))     return ['Counter','Preset','Accum'];
+      if(TIMER_BASE_I.has(inst.t))           return ['Timer','Preset','Accum'];
+      if(TT_TC_I.has(inst.t))                return ['Counter','Preset','Accum'];
       if(['COP','CPS','FLL'].includes(inst.t)) return ['Source','Dest','Length'];
       if(['SCP'].includes(inst.t))           return ['Input','Input Min','Input Max','Output Min','Output Max','Dest'];
       if(['SCL'].includes(inst.t))           return ['Source','Rate','Offset','Dest'];
@@ -5730,6 +6117,11 @@ function showTT(h,cx,cy){
       if(['DTOS','STOD','RTOS','STOR','LOWER','UPPER'].includes(inst.t)) return ['Source','Dest'];
       if(['NEG','ABS','SQR','CLR','NOT'].includes(inst.t))  return ['Source','Dest'];
       if(['SRT'].includes(inst.t))           return ['Array','Dim to Vary','Control','Length','Position'];
+      // Loaders take the data word first, unloaders take the stack first
+      if(inst.t==='FFL')                     return ['Source','FIFO','Control','Length','Position'];
+      if(inst.t==='LFL')                     return ['Source','LIFO','Control','Length','Position'];
+      if(inst.t==='FFU')                     return ['FIFO','Dest','Control','Length','Position'];
+      if(inst.t==='LFU')                     return ['LIFO','Dest','Control','Length','Position'];
       if(['SIZE'].includes(inst.t))          return ['Source','Dim to Vary','Size'];
       if(['CONCAT'].includes(inst.t))        return ['Source A','Source B','Dest'];
       if(['DELETE','MID'].includes(inst.t))  return ['Source','Qty','Start','Dest'];
@@ -5747,17 +6139,83 @@ function showTT(h,cx,cy){
     // which is misleading. Preset/Accum are read from .PRE / .ACC sub-members,
     // not from extra positional operands — NeutralText often emits them as `?`.
     // Synthesize the three rows directly for these instructions.
-    const isTimerCtr = ['TON','TOF','RTO','CTU','CTD'].includes(inst.t);
+    const isTimerCtr = TT_TC_I.has(inst.t);
+    // FFL/FFU/LFL/LFU need their own rows: the Length and Position operands are
+    // literals frozen into the rung text, while the values that matter live in
+    // the CONTROL structure. The generic path would show the stale literals.
+    const isFifo = FIFO_I.has(inst.t);
     let html = '';
-    if(isTimerCtr){
+    if(isFifo){
+      const fp = fifoParts(inst);
+      const ttRow = (lbl, addr, valHtml) =>
+        `<div class="tt-ops-row"><span class="tt-ops-lbl">${lbl}</span>` +
+        `<span class="tt-ops-addr">${addr}</span>${valHtml||''}</div>`;
+      const ttVal = a => {
+        const l = a ? resolveLV(a) : null;
+        if(!l || l.error || l.value === undefined || l.value === null) return '';
+        const v = l.value;
+        const cls = (v===1||v===true) ? 'on' : (v===0||v===false) ? 'off' : 'num';
+        return `<span class="tt-ops-val ${cls}">= ${lvText(v)}</span>`;
+      };
+      // Operand rows in RSLogix order. The stack keeps its '#' so it does not
+      // read as a single word.
+      if(fp.load) html += ttRow('Source', fp.src, ttVal(fp.src));
+      // '#' is the RSLogix 500 file-pointer marker — Logix array operands
+      // (Tag.Array[0]) are written plain and must not get one.
+      const _sPfx = (P && P.isL5X) ? '' : '#';
+      html += ttRow(fp.stackLbl, _sPfx+stripHash(fp.stack), '');
+      if(!fp.load) html += ttRow('Dest', fp.dst, ttVal(fp.dst));
+      html += ttRow('Control', fp.ctl || '—', '');
+      const fLen = fifoCtlNum(fp.ctl,'LEN',fp.lenOp);
+      const fPos = fifoCtlNum(fp.ctl,'POS',fp.posOp);
+      html += ttRow('Length',   fp.ctl?`${fp.ctl}.LEN`:'—', fLen===null?'':`<span class="tt-ops-val num">= ${fLen}</span>`);
+      html += ttRow('Position', fp.ctl?`${fp.ctl}.POS`:'—', fPos===null?'':`<span class="tt-ops-val num">= ${fPos}</span>`);
+      // ── Queue contents, head on the left. Cells below POS hold live entries;
+      //    the rest are stale leftovers the instruction will overwrite.
+      const qAddrs = fifoStackAddrs(fp.stack, fLen);
+      if(qAddrs.length){
+        const cells = qAddrs.map((a,i)=>{
+          const l = resolveLV(a);
+          const known = l && !l.error && l.value !== undefined && l.value !== null;
+          const filled = fPos !== null && i < fPos;
+          const txt = known ? lvText(l.value) : '·';
+          const style = filled
+            ? 'background:#14304a;border-color:#4a9eff88;color:#9fd0ff'
+            : 'background:#111a22;border-color:#2a3a48;color:#54646f';
+          return `<span title="${a}${known?' = '+txt:''}" style="display:inline-block;min-width:15px;`+
+                 `padding:0 3px;margin-right:2px;border:1px solid;border-radius:2px;`+
+                 `text-align:center;${style}">${txt}</span>`;
+        }).join('');
+        const note = fPos === null ? 'position unknown'
+                   : fPos === 0    ? 'empty'
+                   : `${fPos} of ${fLen} queued · head = ${qAddrs[0]}`;
+        html += `<div class="tt-ops-row" style="display:block">`+
+                `<span class="tt-ops-lbl">Queue</span>`+
+                `<div style="margin-top:3px;white-space:nowrap">${cells}</div>`+
+                `<div style="color:var(--text3);font-size:9px;margin-top:2px">${note}</div>`+
+                `</div>`;
+      }
+      // ── CONTROL status bits. The three this instruction actually drives are
+      //    shown solid; the rest belong to other instruction families.
+      const own = new Set([fp.enBit,'DN','EM']);
+      const bits = FIFO_BITS.map(b=>{
+        const v = fifoCtlBit(fp.ctl, b);
+        const c = v===null ? '#4a5a68' : v ? '#3ddc84' : (own.has(b) ? '#6a7a88' : '#3a4a58');
+        const mark = v===null ? '?' : v ? '●' : '·';
+        return `<span style="color:${c};margin-right:6px;${own.has(b)?'':'opacity:.5'}">${b}${mark}</span>`;
+      }).join('');
+      html += `<div class="tt-ops-row" style="display:block">`+
+              `<span class="tt-ops-lbl">${fp.ctl||'Control'}</span>`+
+              `<div style="margin-top:3px;font-size:9px">${bits}</div>`+
+              `</div>`;
+    } else if(isTimerCtr){
       const baseAddr = inst.g;
       const normBase = normalizeAddr(baseAddr);
       const bQual = rungProg ? `${rungProg}.${normBase}` : null;
       const bInfo = (bQual && P?.syms[bQual]) || P?.syms[normBase] || P?.syms[baseAddr];
       const bAlias = bInfo?.aliasFor || '';
-      const readSub = sub => (bQual && liveValues[`${bQual}.${sub}`])
-                          || liveValues[`${normBase}.${sub}`]
-                          || (bAlias && liveValues[`${bAlias}.${sub}`])
+      const readSub = sub => tagSubLV(normBase, sub, rungProg)
+                          || (bAlias && tagSubLV(bAlias, sub, rungProg))
                           || null;
       const dn = readSub('DN');
       const dnHtml = dn ? `<span class="tt-ops-val ${dn.value?'on':'off'}">DN=${dn.value?1:0}</span>` : '';
@@ -5767,10 +6225,18 @@ function showTT(h,cx,cy){
         <span class="tt-ops-addr">${baseAddr}${aliasNote}</span>
         ${dnHtml}
       </div>`;
+      // Time base sits between Timer and Preset, as RSLogix 500 draws the block;
+      // PRE/ACC then also say what they mean in seconds. Counters get neither.
+      const tb = timerBase(inst.t, ops);
+      if(tb) html += `<div class="tt-ops-row">
+        <span class="tt-ops-lbl">Time Base</span>
+        <span class="tt-ops-val lit">${tb.txt}</span>
+        ${tb.note ? `<span style="color:var(--text3);font-size:9px">${tb.note}</span>` : ''}
+      </div>`;
       const preLv = readSub('PRE');
       const accLv = readSub('ACC');
-      const preVal = preLv ? `<span class="tt-ops-val num">= ${preLv.value}</span>` : '';
-      const accVal = accLv ? `<span class="tt-ops-val num">= ${accLv.value}</span>` : '';
+      const preVal = preLv ? `<span class="tt-ops-val num">= ${preLv.value}</span>${timerSecsNote(preLv, tb)}` : '';
+      const accVal = accLv ? `<span class="tt-ops-val num">= ${accLv.value}</span>${timerSecsNote(accLv, tb)}` : '';
       html += `<div class="tt-ops-row">
         <span class="tt-ops-lbl">${lbls[1]}</span>
         <span class="tt-ops-addr">${baseAddr}.PRE</span>
@@ -5795,8 +6261,10 @@ function showTT(h,cx,cy){
 
         let valHtml = '';
         if(isBinaryWordAddr(normOp)){
-          // Binary word address: assemble 16-bit word and show Bin + Dec
-          const assembled = assembleBinaryWord(normOp);
+          // Binary word address: show Bin + Dec. The word itself is one atomic read;
+          // the bits may be only the few the ladder names, so they are the fallback.
+          const wordV = (opLvResolved && !opLvResolved.error) ? opLvResolved.value : null;
+          const assembled = Number.isInteger(wordV) ? (wordV & 0xFFFF) : assembleBinaryWord(normOp);
           if(assembled !== null){
             const binStr = toBin16(assembled);
             valHtml = `<span class="tt-ops-val num">Bin: ${binStr}</span>`;
@@ -5811,9 +6279,9 @@ function showTT(h,cx,cy){
           const v = opLvResolved.value;
           const cls = v===1||v===true?'on': v===0||v===false?'off':'num';
           // Show decimal value
-          valHtml = `<span class="tt-ops-val ${cls}">= ${v}</span>`;
+          valHtml = `<span class="tt-ops-val ${cls}">= ${lvText(v)}</span>`;
           // Show raw format (binary/hex) if the original Radix differs
-          const rawVal = opInfo?.rawValue;
+          const rawVal = opInfo?.rawValue ? radixText(opInfo.rawValue, v) : '';
           if(rawVal && rawVal !== String(v)){
             valHtml += `<span class="tt-ops-val" style="color:var(--text3);font-size:9px;margin-left:4px">(${rawVal})</span>`;
           }
@@ -5845,10 +6313,13 @@ function showTT(h,cx,cy){
     opsEl.style.display = 'none';
   }
 
-  tt.style.display='block';
-  tt.style.left=Math.min(cx+14,window.innerWidth-310)+'px';
-  tt.style.top=Math.min(cy-10,window.innerHeight-160)+'px';
+  // An empty line takes no room, whichever tooltip was on screen before this one
+  ['tt-s','tt-t','tt-d','tt-v'].forEach(id => {
+    const el = document.getElementById(id);
+    el.style.display = el.textContent ? '' : 'none';
+  });
 }
+// ── END TOOLTIP ──
 
 // ── Right panel: show rung details ──
 function showRungPanel(rung){
@@ -6080,10 +6551,9 @@ function updateTagDetailValue(addr){
   const el=document.getElementById('tdh-val'),ts=document.getElementById('tdh-ts');
   if(!lv){el.textContent='—';el.className='tdh-val nl';ts.textContent='';ts.title='';renderTagHistory(addr);return;}
   if(lv.error){el.textContent='ERR';el.className='tdh-val nl';ts.textContent=lv.error.slice(0,30);ts.title='';renderTagHistory(addr);return;}
-  const v=lv.value;el.textContent=String(v);
-  if(v===true||v===1)el.className='tdh-val b1';
-  else if(v===false||v===0)el.className='tdh-val b0';
-  else el.className='tdh-val num';
+  // Same text online and offline: a bit is 1/0, a timer its DN, a CONTROL POS/LEN
+  const vt=tagValueText(addr,lv);el.textContent=vt===null?'—':vt;
+  el.className=vt==='1'?'tdh-val b1':vt==='0'?'tdh-val b0':vt===null?'tdh-val nl':'tdh-val num';
   // Source-aware stamp. A value that came out of a project file is not a
   // reading — naming the source beats printing the moment the file was loaded.
   if(lv.l5x){
@@ -6123,15 +6593,9 @@ function showTagMenu(anchorEl, addr, mouseEvent, fileHint){
       });
     });
   } else {
-    const idx  = P?.tagIndex[norm] || {writes:[], reads:[]};
-    idx.writes.forEach(rg=>{
-      rg.ins.filter(i=>(i.r==='out'||i.r==='both')&&normalizeAddr(i.g)===norm)
-        .forEach(i=>usages.push({rg, inst:i, role:'write'}));
-    });
-    idx.reads.forEach(rg=>{
-      rg.ins.filter(i=>i.r==='in'&&normalizeAddr(i.g)===norm)
-        .forEach(i=>usages.push({rg, inst:i, role:'read'}));
-    });
+    // usagesFor also catches FFL/FFU, whose moved words are declared through
+    // extraWrites/extraReads rather than as the instruction's own address.
+    usagesFor(norm).forEach(u=>usages.push(u));
   }
 
   if(!usages.length){
@@ -6162,6 +6626,7 @@ function showTagMenu(anchorEl, addr, mouseEvent, fileHint){
     MOV:'#b080e0',ADD:'#b080e0',SUB:'#b080e0',MUL:'#b080e0',DIV:'#b080e0',
     EQU:'#f0d060',GRT:'#f0d060',LES:'#f0d060',GEQ:'#f0d060',LEQ:'#f0d060',NEQ:'#f0d060',
     TON:'#40d0c0',TOF:'#40d0c0',CTU:'#4a9eff',CTD:'#4a9eff',RES:'#4a9eff',
+    FFL:'#6a96b0',FFU:'#6a96b0',LFL:'#6a96b0',LFU:'#6a96b0',
   })[t]||'#6a96b0';
 
   const renderGroup = (label, items) => {
@@ -6250,6 +6715,77 @@ function closeTagMenu(){
 }
 
 // ── Show all usages in right panel (same layout as popup) ──
+// ── Cross-reference rows for one address ──────────────────────────────
+// Also matches instructions that reach the address through extraWrites /
+// extraReads (FFL/FFU stack words and an unloader's destination), whose primary
+// address is the CONTROL structure and would otherwise never match.
+function usagesFor(norm){
+  const idx = P?.tagIndex[norm] || {writes:[], reads:[]};
+  const out = [];
+  idx.writes.forEach(rg=>{
+    rg.ins.filter(i =>
+      ((i.r==='out'||i.r==='both') && normalizeAddr(i.g)===norm) ||
+      ((i.extraWrites||[]).some(a=>normalizeAddr(a)===norm))
+    ).forEach(i=>out.push({rg, inst:i, role:'write'}));
+  });
+  idx.reads.forEach(rg=>{
+    rg.ins.filter(i =>
+      (i.r==='in' && normalizeAddr(i.g)===norm) ||
+      ((i.extraReads||[]).some(a=>normalizeAddr(a)===norm))
+    ).forEach(i=>out.push({rg, inst:i, role:'read'}));
+  });
+  return out;
+}
+
+// ── The number a Cross Reference row is actually about ─────────────────
+// Shown after the "LAD n #r" path so that hunting for a specific value is a
+// glance instead of a click-through. Two cases:
+//   writes (MOV and the rest of MATH_DEST_I) — what will be put into the
+//     destination: a literal prints as the number, a tag as "name = value"
+//   compares (EQU/NEQ/GRT/GEQ/LES/LEQ/LIM) — what the rung tests against.
+//     Without this a list of compares on one tag is six identical-looking rows;
+//     the FIFO "READS THE DEST" section is exactly that.
+// resolveLV reads currentRungProg, so the usage's own program scope is pushed
+// around the lookup — otherwise an L5X program tag resolves against whatever
+// rung happened to be rendering last.
+const XREF_CMP_SYM = {EQU:'=', NEQ:'\u2260', GRT:'>', GEQ:'\u2265', LES:'<', LEQ:'\u2264'};
+function xrefRowValue(inst, rg){
+  if(!inst) return '';
+  const ops = inst.operands || [];
+  const isMath = MATH_DEST_I.has(inst.t);
+  const isCmp  = !!XREF_CMP_SYM[inst.t] || inst.t === 'LIM';
+  if(!isMath && !isCmp) return '';
+  if(ops.length < 2) return '';
+  const prevProg = currentRungProg;
+  currentRungProg = (rg && rg.file) ? rg.file.split('/')[0] : null;
+  try{
+    const show = op => {
+      const lit = parsePlcLiteral(op);
+      if(lit !== null) return String(lit);
+      const lv = resolveLV(op);
+      const v = (lv && !lv.error && lv.value !== undefined && lv.value !== null) ? lv.value : '?';
+      return `${op} = ${lvText(v)}`;
+    };
+    if(isCmp){
+      // LIM tests a range: show its bounds, the Test operand is the row's tag
+      if(inst.t === 'LIM' && ops.length >= 3) return `\u2208 ${show(ops[0])} \u2026 ${show(ops[2])}`;
+      // For a two-operand compare, the interesting half is the one that is NOT
+      // the tag being cross-referenced. A single literal is that half outright;
+      // otherwise fall back to spelling out both sides.
+      const lits = ops.slice(0, 2).filter(o => parsePlcLiteral(o) !== null);
+      if(lits.length === 1) return `${XREF_CMP_SYM[inst.t]} ${parsePlcLiteral(lits[0])}`;
+      return `${show(ops[0])} ${XREF_CMP_SYM[inst.t]} ${show(ops[1])}`;
+    }
+    const srcOps = ops.slice(0, -1);            // every operand except the destination
+    const parts = srcOps.map(show);
+    const sym = {ADD:'+',SUB:'\u2212',MUL:'\u00d7',DIV:'\u00f7',MOD:'%',AND:'&',OR:'|',XOR:'^'}[inst.t];
+    const body = (parts.length === 2 && sym) ? parts.join(` ${sym} `) : parts.join(', ');
+    return body ? `\u2190 ${body}` : '';
+  } finally {
+    currentRungProg = prevProg;
+  }
+}
+
 function showUsagesInPanel(norm, usages, displaySym, displayDesc){
   openRPanel();
   const rl = document.getElementById('rung-list');
@@ -6281,10 +6817,11 @@ function showUsagesInPanel(norm, usages, displaySym, displayDesc){
     MOV:'#b080e0',ADD:'#b080e0',SUB:'#b080e0',MUL:'#b080e0',DIV:'#b080e0',
     EQU:'#f0d060',GRT:'#f0d060',LES:'#f0d060',GEQ:'#f0d060',LEQ:'#f0d060',NEQ:'#f0d060',
     TON:'#40d0c0',TOF:'#40d0c0',CTU:'#4a9eff',CTD:'#4a9eff',RES:'#4a9eff',
+    FFL:'#6a96b0',FFU:'#6a96b0',LFL:'#6a96b0',LFU:'#6a96b0',
   })[t]||'#6a96b0';
 
   // Flat list: writes first, then reads; within each group sort by file number then rung number
-  const sorted = [...usages].sort((a, b) => {
+  const xrefSort = list => [...list].sort((a, b) => {
     const aw = a.role === 'write' ? 0 : 1;
     const bw = b.role === 'write' ? 0 : 1;
     if (aw !== bw) return aw - bw;
@@ -6293,20 +6830,25 @@ function showUsagesInPanel(norm, usages, displaySym, displayDesc){
     if (fa !== fb) return fa - fb;
     return a.rg.rungNum - b.rg.rungNum;
   });
-  sorted.forEach(u => {
+  // linkAddr — the tag this row is reached through; it labels the inter-rung wire
+  const mkRow = (u, linkAddr) => {
     const c = instClr(u.inst.t);
     const row = document.createElement('div');
     row.style.cssText = 'padding:5px 10px;cursor:pointer;transition:background .1s;border-radius:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:8;-webkit-box-orient:vertical;line-height:1.5;font-family:var(--mono);font-size:10px;word-break:break-word;';
     const cmt = u.rg.comment ? `  <span style="color:var(--text2);font-family:var(--sans)">${u.rg.comment}</span>` : '';
-    row.innerHTML = `<span style="padding:1px 5px;border-radius:2px;background:${c}18;color:${c};border:1px solid ${c}44;white-space:nowrap">${u.inst.t}</span> <span style="color:var(--text2);white-space:nowrap">${u.rg.file} #${u.rg.rungNum}</span>${cmt}`;
+    // What this row is about — the written value, or the compared number
+    const wv = xrefRowValue(u.inst, u.rg);
+    const wvHtml = wv ? ` <span style="color:#4a9eff;white-space:nowrap">${wv}</span>` : '';
+    row.innerHTML = `<span style="padding:1px 5px;border-radius:2px;background:${c}18;color:${c};border:1px solid ${c}44;white-space:nowrap">${u.inst.t}</span> <span style="color:var(--text2);white-space:nowrap">${u.rg.file} #${u.rg.rungNum}</span>${wvHtml}${cmt}`;
     row.addEventListener('mouseenter', ()=> row.style.background='var(--bg3)');
     row.addEventListener('mouseleave', ()=> row.style.background='');
     row.addEventListener('click', ()=>{
       const parentId = selHit?.scene?.rungId || null;
-      loadRungIntoScene(u.rg, norm, parentId);
+      loadRungIntoScene(u.rg, linkAddr, parentId);
     });
-    rl.appendChild(row);
-  });
+    return row;
+  };
+  xrefSort(usages).forEach(u => rl.appendChild(mkRow(u, norm)));
 
   if(!usages.length){
     const empty = document.createElement('div');
@@ -6314,6 +6856,69 @@ function showUsagesInPanel(norm, usages, displaySym, displayDesc){
     empty.textContent='address not used';
     rl.appendChild(empty);
   }
+
+  // ── Related sections (FIFO/LIFO queues) ──
+  // Kept visually separate and labelled with their own address: these rungs do
+  // NOT reference `norm`, and merging them into the list above would break the
+  // panel's "all usages of one address" contract.
+  const xsec = fifoXrefSections(usages, norm);
+  let xsecCount = 0;
+  xsec.forEach(sec => {
+    xsecCount += sec.usages.length;
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'margin-top:8px;padding:6px 10px 4px;border-top:1px solid var(--border);'
+      + 'font-family:var(--mono);font-size:9px;letter-spacing:.5px;color:var(--text3);'
+      + 'display:flex;justify-content:space-between;align-items:center;gap:8px;';
+    hdr.innerHTML = '<span>' + sec.title + ' <span style="color:#4a9eff">' + sec.addr + '</span>'
+      + (sec.sym ? ' <span style="color:var(--text2);font-family:var(--sans)">' + sec.sym + '</span>' : '')
+      + '</span><span>' + sec.usages.length + '</span>';
+    rl.appendChild(hdr);
+    xrefSort(sec.usages).forEach(u => rl.appendChild(mkRow(u, sec.addr)));
+  });
+  if(xsecCount) rc.textContent = usages.length + xsecCount;
+}
+
+// ── Cross-reference sections for a FIFO/LIFO queue ─────────────────────────
+// A queue's CONTROL structure is referenced by nothing but the FFL and FFU
+// themselves, so its Cross Reference is a two-row dead end — while the question
+// actually being asked at a queue is "what goes in, and who acts on what comes
+// out". Neither Source nor Dest is the block's own address, so the ordinary
+// click-the-tag route does not reach them.
+//
+// Given whatever usages the panel is already showing, find any FFL/FFU among
+// them, resolve BOTH halves through their shared CONTROL structure, and return:
+//   • every instruction writing the loader's Source — the MOVs that decide
+//     which value gets queued (each row carries its written value)
+//   • every instruction reading the unloader's Destination — the compares that
+//     act on whatever came out
+// Works from either half, and from a queue word or the Dest itself. A section
+// for the address the panel is already about is skipped, as are the FIFO
+// instructions themselves — they are in the main list already.
+function fifoXrefSections(usages, norm){
+  const out = [];
+  if(!P) return out;
+  const seed = (usages||[]).map(u=>u.inst).find(i => i && FIFO_I.has(i.t));
+  if(!seed) return out;
+  const ctl = (fifoParts(seed)||{}).ctl;
+  if(!ctl) return out;
+  const halves = [];
+  (P.rungs||[]).forEach(rg => rg.ins.forEach(i => {
+    if(FIFO_I.has(i.t) && normalizeAddr(i.g) === ctl) halves.push(i);
+  }));
+  const symOf = a => {
+    const info = P.syms[a], d = getDesc(a);
+    return info?.sym || d?.sym || info?.desc || d?.desc || '';
+  };
+  const add = (title, addr, role) => {
+    if(!addr || addr === norm) return;
+    const rows = usagesFor(addr).filter(u => u.role === role && !FIFO_I.has(u.inst.t));
+    if(rows.length) out.push({title, addr, sym: symOf(addr), usages: rows});
+  };
+  const loader   = halves.find(i =>  FIFO_LOAD_I.has(i.t));
+  const unloader = halves.find(i => !FIFO_LOAD_I.has(i.t));
+  if(loader)   add('WRITES INTO SOURCE', normalizeAddr((fifoParts(loader)||{}).src || ''), 'write');
+  if(unloader) add('READS THE DEST',     normalizeAddr((fifoParts(unloader)||{}).dst || ''), 'read');
+  return out;
 }
 
 // Load a specific rung into the ladder scene (adds it if not present, then fits)
@@ -6377,7 +6982,7 @@ function loadRungIntoScene(rg, linkAddr, parentRungId){
 
   // Added to existing graph — just redraw, keep camera
   if(wsConn&&wsConn.readyState===WebSocket.OPEN)
-    wsConn.send(watchOnlyPayload(getWatchTags()));
+    _sendWatchList(getWatchTags());
   drawGraph(); pushSnap();
 }
 
@@ -6417,9 +7022,11 @@ function lvPill(addr, progHint){
     : (() => { const _savedProg = currentRungProg; currentRungProg = progHint || null; const r = resolveLV(addr); currentRungProg = _savedProg; return r; })();
   if(!lv)return'';
   if(lv.error)return`<span class="lv-pill e">ERR</span>`;
-  if(lv.value===true||lv.value===1||lv.value==='1')return`<span class="lv-pill t">1</span>`;
-  if(lv.value===false||lv.value===0||lv.value==='0')return`<span class="lv-pill f">0</span>`;
-  return`<span class="lv-pill n">${String(lv.value).slice(0,8)}</span>`;
+  const vt=tagValueText(addr,lv,progHint);
+  if(vt===null)return'';
+  if(vt==='1')return`<span class="lv-pill t">1</span>`;
+  if(vt==='0')return`<span class="lv-pill f">0</span>`;
+  return`<span class="lv-pill n">${vt.slice(0,8)}</span>`;
 }
 
 function hlLogic500(t){
@@ -6573,7 +7180,9 @@ function extractBitNum(childAddr,parentAddr){
 // "Pause_NoDough.DN" → "Pause_NoDough", "Alarm_Word_1.5" → "Alarm_Word_1"
 // "Timer.ACC" → "Timer", "N7:0/5" → "N7:0"
 // Returns null if addr has no parent (already a base tag)
-const TIMER_CTR_SUFFIXES = new Set(['DN','EN','TT','ACC','PRE','OV','UN','CU','CD','ER','FS','LS','FD','IN','PT','ET','Q','CV','PV','CTL','LEN','POS','ST','EW','TO']);
+// 'EU','EM','UL' are CONTROL-only (FFL/FFU/LFL/LFU/BSL/BSR) — without them
+// getParentAddr('R6:0/EM') returns null and the parent word is never folded in.
+const TIMER_CTR_SUFFIXES = new Set(['DN','EN','TT','ACC','PRE','OV','UN','CU','CD','ER','FS','LS','FD','IN','PT','ET','Q','CV','PV','CTL','LEN','POS','ST','EW','TO','EU','EM','UL']);
 function getParentAddr(addr){
   // L5X dot notation: Tag.suffix (Tag.DN, Tag.ACC, Tag.0)
   const dotIdx=addr.lastIndexOf('.');
@@ -6699,13 +7308,14 @@ function renderTagList(){
     const lv = resolveLV(addr) || (P.isL5X && resolveLV(displayName)) || null;
     let valBadge = '';
     if(lv){
+      const vt = lv.error ? null : tagValueText(addr, lv);
       if(lv.error) valBadge=`<span class="tval ve">ERR</span>`;
-      else if(lv.value===true||lv.value===1||lv.value==='1')
+      else if(vt==='1')
         valBadge=`<span class="tval v1">1</span>`;
-      else if(lv.value===false||lv.value===0||lv.value==='0')
+      else if(vt==='0')
         valBadge=`<span class="tval v0">0</span>`;
-      else
-        valBadge=`<span class="tval vn">${String(lv.value).slice(0,7)}</span>`;
+      else if(vt!==null)
+        valBadge=`<span class="tval vn">${vt.slice(0,7)}</span>`;
     }
 
     const div = document.createElement('div');
@@ -6829,8 +7439,31 @@ function isSyntheticAddr(a){ return /^U3:\d+$/i.test(a); }
 const OPERAND_TAG_I = new Set([
   'EQU','NEQ','GRT','GEQ','LES','LEQ','LIM','MEQ',
   'MOV','MVM','ADD','SUB','MUL','DIV','MOD','SQR','SQRT','NEG','ABS',
-  'AND','OR','XOR','NOT','BTD','SCP','SCL','TOD','FRD','DDV','PID'
+  'AND','OR','XOR','NOT','BTD','SCP','SCL','TOD','FRD','DDV','PID',
+  'FFL','FFU','LFL','LFU'
 ]);
+// FFL/FFU/LFL/LFU: the CONTROL status bits plus LEN/POS, and the concrete
+// stack words the file-pointer operand stands for. The bridge cannot read a
+// "#N9:0" pointer and has no idea how long the stack is, so the expansion has
+// to be done here or the queue display stays blank online.
+function fifoWatchTags(inst){
+  const fp = fifoParts(inst);
+  if(!fp) return [];
+  const out = [];
+  if(fp.ctl){
+    out.push(`${fp.ctl}.LEN`, `${fp.ctl}.POS`);
+    // Bit spelling is not the same on both sides: the SLC bridge wants
+    // R6:0/EN, Logix wants MyControl.EN. Asking for the wrong one is a bad
+    // address, not a miss, so pick by project type rather than sending both.
+    const sep = (P && P.isL5X) ? '.' : '/';
+    FIFO_BITS.forEach(b=>out.push(`${fp.ctl}${sep}${b}`));
+  }
+  if(fp.src) out.push(normalizeAddr(fp.src));
+  if(fp.dst) out.push(normalizeAddr(fp.dst));
+  fifoStackAddrs(fp.stack, fifoCtlNum(fp.ctl,'LEN',fp.lenOp)).forEach(a=>out.push(normalizeAddr(a)));
+  return out;
+}
+
 function instOperandTags(inst){
   if(!inst || !inst.operands || inst.operands.length < 2) return [];
   if(!OPERAND_TAG_I.has(inst.t)) return [];
@@ -6888,6 +7521,7 @@ function getWatchTags(){
         if(!i.g || i.g.startsWith('__label:')) return;
         addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
         instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
+        fifoWatchTags(i).forEach(op=> addTag(wireOf(op), null, prog));
       });
     }
   });
@@ -6902,6 +7536,7 @@ function getWatchTags(){
       if(!i.g || i.g.startsWith('__label:')) return;
       addTag(wireOf(normalizeAddr(i.g)), i.t, prog);
       instOperandTags(i).forEach(op=> addTag(wireOf(normalizeAddr(op)), null, prog));
+      fifoWatchTags(i).forEach(op=> addTag(wireOf(op), null, prog));
     });
   });
   // ── Online debug: log what tags are being watched for debug-tagged variables ──
@@ -6962,11 +7597,30 @@ function symDataType(key, depth){
   return '';
 }
 
+// SLC rack layout for the bridge's I/O block reads: the words each slot takes
+// in the input and the output image — the "SLOT … SCAN_IN n SCAN_OUT m" lines of
+// a .SLC export. With it a bridge that has "Read I/O as block" switched on reads
+// the I/O image in one request per file instead of one per I/O word. Parsed
+// once per project; null for L5X or a source without those lines.
+function slcIoSlots(){
+  if(!P || P.isL5X) return null;
+  if(P._ioSlots === undefined){
+    const map = {};
+    const re = /^SLOT\s+(\d+)\s.*?\bSCAN_IN\s+(\d+)\s+SCAN_OUT\s+(\d+)/gm;
+    let m;
+    while((m = re.exec(P._rawSLCText || ''))) map[m[1]] = [+m[2], +m[3]];
+    P._ioSlots = Object.keys(map).length ? map : null;
+  }
+  return P._ioSlots;
+}
+
 // Build the full watch_only payload including L5X type hints when available.
 function watchOnlyPayload(tags){
   const msg = {cmd:'watch_only', tags};
   const types = buildTypeMap(tags);
   if(Object.keys(types).length) msg.tagTypes = types;
+  const io = slcIoSlots();
+  if(io) msg.ioSlots = io;
   return JSON.stringify(msg);
 }
 
@@ -6982,7 +7636,7 @@ function selectTag(addr){
   graphData=buildGraph(sel); layoutGraph(graphData);
   cam={x:0,y:0,z:1};
   if(wsConn&&wsConn.readyState===WebSocket.OPEN){
-    wsConn.send(watchOnlyPayload(getWatchTags()));
+    _sendWatchList(getWatchTags());
   }
   setTimeout(fitGraph,30);
 }
@@ -7021,6 +7675,159 @@ function setConnUI(state,label,ctrl){
     if(state!=='ok' && _tagRefreshBusy) _tagRefreshAbort = true;
   }
 }
+// ── BRIDGE SESSION LIST (connect dialog) ─────────────────────────────────────
+// One bridge process can serve several controllers, each on its own WebSocket
+// port. Every session answers `hello` with the full list, so a single probe
+// describes the whole bridge. A session saved in plc_bridge_devices.json is
+// shown by its name; an ad-hoc one has no name and is shown by its port.
+let bridgeSessions = [];   // last known list, entries carry the host we found them on
+let _lpScanSeq     = 0;    // a newer scan invalidates the results of an older one
+let _lpScanHost    = '';   // host of the last scan — retyping one rescans
+let _lpHostJob     = 0;    // debounce timer for that rescan
+const LP_HTTP_PORT = 8766; // bridge REST port, one per process (never a session)
+
+function _lpHostOf(url){
+  const m = String(url||'').match(/^wss?:\/\/([^\/:]+|\[[^\]]+\])(?::(\d+))?/i);
+  return m ? {host:m[1], port:parseInt(m[2]||'8765',10)} : {host:'localhost', port:8765};
+}
+function _lpSessionLabel(s){
+  return s.label || s.device || (s.ws_port ? String(s.ws_port) : (s.name||'?'));
+}
+// Open a throwaway socket just to read `hello`, then drop it. Resolves with the
+// session list, or null when nothing on that port speaks the bridge protocol.
+function _lpProbe(url, timeout){
+  return new Promise(resolve=>{
+    let ws=null, done=false;
+    const tm=setTimeout(()=>fin(null), timeout||1600);
+    function fin(v){
+      if(done) return; done=true; clearTimeout(tm);
+      try{ ws && ws.close(); }catch(e){}
+      resolve(v);
+    }
+    try{ ws=new WebSocket(url); }catch(e){ return fin(null); }
+    ws.onmessage=e=>{
+      try{
+        const m=JSON.parse(e.data);
+        if(m.type!=='hello' && m.type!=='sessions') return;
+        const host=_lpHostOf(url).host;
+        // Older bridges answer hello without a session list — treat that reply
+        // as a one-session bridge instead of showing nothing.
+        const list=(m.sessions && m.sessions.length) ? m.sessions : [{
+          name:m.plc||'', ws_port:m.wsPort||_lpHostOf(url).port,
+          connected:!!m.connected, ip:(m.controller&&m.controller.ip)||''}];
+        fin(list.map(s=>Object.assign({host}, s)));
+      }catch(err){}
+    };
+    ws.onerror=()=>fin(null);
+    ws.onclose=()=>fin(null);
+  });
+}
+// REST fallback. It answers for the whole process at once, so it finds sessions
+// on ports outside the swept range — a preset may pin any port. Both the CLI
+// bridge and the GUI panel serve it on 8766.
+function _lpProbeHttp(host, timeout){
+  return new Promise(resolve=>{
+    if(typeof fetch!=='function') return resolve(null);
+    let done=false;
+    const ctl=(typeof AbortController==='function')?new AbortController():null;
+    const fin=v=>{ if(done)return; done=true; clearTimeout(tm); resolve(v); };
+    const tm=setTimeout(()=>{ try{ ctl&&ctl.abort(); }catch(e){} fin(null); }, timeout||1500);
+    fetch('http://'+host+':'+LP_HTTP_PORT+'/sessions', ctl?{signal:ctl.signal}:undefined)
+      .then(r=>r.ok?r.json():null)
+      .then(j=>{
+        const l=(j&&j.sessions)||[];
+        fin(l.length?l.map(s=>Object.assign({host}, s)):null);
+      })
+      .catch(()=>fin(null));
+  });
+}
+function renderBridgeSessions(list, note){
+  const box=document.getElementById('lp-sess-list');
+  if(!box) return;
+  const curUrl=((document.getElementById('lp-url')||{}).value||'').trim().toLowerCase();
+  box.innerHTML='';
+  (list||[]).forEach(s=>{
+    const url=`ws://${s.host||'localhost'}:${s.ws_port}`;
+    const row=document.createElement('div');
+    row.className='lp-sess'+(url.toLowerCase()===curUrl?' sel':'');
+    row.title=url+' — click to select, double-click to connect';
+    row.innerHTML='<span class="lp-sess-dot'+(s.connected?' on':'')+'"></span>'+
+                  '<span class="lp-sess-name"></span><span class="lp-sess-meta"></span>';
+    row.children[1].textContent=_lpSessionLabel(s);
+    row.children[2].textContent=[
+      s.ip ? s.ip+(s.slot!=null?':'+s.slot:'') : '',
+      s.type||'', 'ws:'+s.ws_port, s.connected?'':'offline',
+      s.recording?'REC':''
+    ].filter(Boolean).join('  ·  ');
+    row.addEventListener('click',()=>{
+      const inp=document.getElementById('lp-url');
+      if(inp) inp.value=url;
+      renderBridgeSessions(bridgeSessions,'');
+    });
+    row.addEventListener('dblclick',()=>connectWS(url));
+    box.appendChild(row);
+  });
+  if(!(list||[]).length || note){
+    const e=document.createElement('div');
+    e.className='lp-sess-empty';
+    e.textContent=note||'Bridge reports no active connections';
+    box.appendChild(e);
+  }
+}
+// Values pushed by a live connection — no probing needed, the socket is open.
+function _lpAdoptSessions(list, srcUrl){
+  const host=_lpHostOf(srcUrl||'').host;
+  bridgeSessions=(list||[]).map(s=>Object.assign({host}, s));
+  const panel=document.getElementById('live-panel');
+  if(panel && !panel.classList.contains('hidden')) renderBridgeSessions(bridgeSessions,'');
+}
+async function refreshBridgeSessions(){
+  const seq=++_lpScanSeq;
+  const cur=_lpHostOf((document.getElementById('lp-url')||{}).value||'ws://localhost:8765');
+  renderBridgeSessions([], 'Scanning '+cur.host+'…');
+  // An open connection can answer without a second socket. Give it a moment,
+  // then probe anyway — an older bridge does not know the command.
+  if(wsConn && wsConn.readyState===WebSocket.OPEN){
+    try{
+      wsConn.send(JSON.stringify({cmd:'list_sessions'}));
+      await new Promise(r=>setTimeout(r,600));
+      if(seq!==_lpScanSeq) return;
+      if(bridgeSessions.length){ renderBridgeSessions(bridgeSessions,''); return; }
+    }catch(e){}
+  }
+  // The port in the field and the REST API in parallel: one of them usually
+  // knows everything, and REST also reports ports the sweep would never reach.
+  const [wsHit, httpHit] = await Promise.all([
+    _lpProbe('ws://'+cur.host+':'+cur.port, 1600),
+    _lpProbeHttp(cur.host, 1500)
+  ]);
+  if(seq!==_lpScanSeq) return;
+  let found=[].concat(wsHit||[], httpHit||[]);
+  let swept=false;
+  if(!found.length){
+    // Nothing answered — sweep the range the bridge allocates from (8766 is its
+    // HTTP port and is never handed to a PLC session).
+    swept=true;
+    const ports=[];
+    for(let p=8765;p<=8772;p++) if(p!==8766 && p!==cur.port) ports.push(p);
+    const res=await Promise.all(ports.map(p=>_lpProbe('ws://'+cur.host+':'+p, 1600)));
+    found=[].concat.apply([], res.filter(Boolean));
+  }
+  if(seq!==_lpScanSeq) return;          // a newer scan already started
+  const seen=new Set(), list=[];
+  found.forEach(s=>{
+    const k=(s.host||'')+':'+s.ws_port;
+    if(!seen.has(k)){ seen.add(k); list.push(s); }
+  });
+  bridgeSessions=list;
+  _lpScanHost=cur.host;
+  console.log('[bridge-scan] '+cur.host+': ws:'+cur.port+'='+((wsHit&&wsHit.length)||0)+
+              ' rest:'+LP_HTTP_PORT+'='+((httpHit&&httpHit.length)||0)+
+              (swept?' sweep 8765-8772='+found.length:'')+' → '+list.length+' session(s)');
+  renderBridgeSessions(list, list.length ? '' :
+    ('No bridge answered on '+cur.host+' — checked ws:'+cur.port+
+     ', ws:8765-8772 and http:'+LP_HTTP_PORT+'/sessions. Is the bridge running on this host?'));
+}
 function connectWS(url){
   if(wsConn){try{wsConn.close();}catch(e){}}
   document.getElementById('lp-status').textContent='Connecting…';
@@ -7038,7 +7845,7 @@ function connectWS(url){
         `\n  [${dbgWatch.join(', ')}]`,
         'color:#0ff;font-weight:bold');
     }
-    wsConn.send(watchOnlyPayload(watchTags));
+    _sendWatchList(watchTags);
     const iv=parseFloat(document.getElementById('poll-range').value)||1;
     wsConn.send(JSON.stringify({cmd:'set_interval',interval:iv}));
   };
@@ -7060,7 +7867,8 @@ function connectWS(url){
           console.log(`%c[connectWS/ONLINE] ← unknown msg type="${msg.type}"`, 'color:#f80');
         }
       }
-      if(msg.type==='hello'){setConnUI('ok','LIVE',msg.controller);if(msg.values)mergeValues(msg.values);}
+      if(msg.type==='hello'){setConnUI('ok','LIVE',msg.controller);if(msg.sessions)_lpAdoptSessions(msg.sessions,wsConn&&wsConn.url);if(msg.values)mergeValues(msg.values);}
+      else if(msg.type==='sessions')_lpAdoptSessions(msg.sessions,wsConn&&wsConn.url);
       else if(msg.type==='values')mergeValues(msg.data);
       else if(msg.type==='status')setConnUI(msg.connected?'ok':'err',msg.connected?'LIVE':'DISCONNECTED',msg.controller);
     }catch(err){
@@ -7280,6 +8088,7 @@ function _recKeySet(){
           if(!i.g || i.g.startsWith('__label:')) return;
           addKey(normalizeAddr(i.g), i.t, prog);
           instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
+          fifoWatchTags(i).forEach(op=> addKey(op, null, prog));
         });
       }
     });
@@ -7293,12 +8102,21 @@ function _recKeySet(){
       if(!i.g || i.g.startsWith('__label:')) return;
       addKey(normalizeAddr(i.g), i.t, prog);
       instOperandTags(i).forEach(op=> addKey(normalizeAddr(op), null, prog));
+      fifoWatchTags(i).forEach(op=> addKey(op, null, prog));
     });
   });
   return out;
 }
 
 // ── LIVE TAG SYNC — every 2s collect visible tags, update bridge if changed ──
+// Every watch list reaches the bridge through _sendWatchList, which records its
+// key, so the sync below compares against what the bridge really polls. Sends
+// that skipped the key (onopen, selectTag, …) left it stale: coming back within
+// 2 s to the view it had last recorded made the sync ping instead of resending.
+function _sendWatchList(tags){
+  _lastWatchKey = [...tags].sort().join('\x00');
+  wsConn.send(watchOnlyPayload(tags));
+}
 function _syncWatchList(){
   if(!wsConn||wsConn.readyState!==WebSocket.OPEN) return;
   if(_saveReadInProgress) return; // Save Online owns the watch set right now
@@ -7306,8 +8124,7 @@ function _syncWatchList(){
   const key  = [...tags].sort().join('\x00');
   if(key !== _lastWatchKey){
     const prevKey = _lastWatchKey;
-    _lastWatchKey = key;
-    wsConn.send(watchOnlyPayload(tags));
+    _sendWatchList(tags);
     // ── Online debug: log watch list change ──
     if(_debugOnline.size){
       const dbgTags = tags.filter(t => _isDbgOnline(t));
@@ -7466,9 +8283,12 @@ function loadProject(proj){
   });
   activeFilter = 'ALL';
 
-  if(wsConn&&wsConn.readyState===WebSocket.OPEN)
-    wsConn.send(JSON.stringify({cmd:'watch',tags:Object.keys(P.syms)}));
   renderTagList(); renderLadderList(); resize();
+  // A connected bridge gets what THIS project shows — the visible rungs, i.e.
+  // the 2-second sync's own list. It used to be sent every symbol of the
+  // project (4 801 on the G1 SLC) as an additive `watch`, which the sync could
+  // leave standing because that send never touched _lastWatchKey.
+  if(wsConn&&wsConn.readyState===WebSocket.OPEN) _sendWatchList(getWatchTags());
 }
 
 // ── EVENTS ──
@@ -7627,7 +8447,7 @@ function loadFullLadder(fileKey){
   cam = {x:0, y:0, z:1};
   drawGraph();
   if(wsConn&&wsConn.readyState===WebSocket.OPEN)
-    wsConn.send(watchOnlyPayload(getWatchTags()));
+    _sendWatchList(getWatchTags());
   setTimeout(fitGraph, 30);
 
   // Update count badge
@@ -7691,6 +8511,17 @@ document.getElementById('btn-rec').addEventListener('click', ()=>{
 document.getElementById('btn-connect').addEventListener('click',()=>{
   document.getElementById('live-panel').classList.remove('hidden');
   document.getElementById('lp-status').textContent='';
+  refreshBridgeSessions();
+});
+document.getElementById('lp-refresh').addEventListener('click',()=>refreshBridgeSessions());
+document.getElementById('lp-url').addEventListener('input',()=>{
+  renderBridgeSessions(bridgeSessions,'');
+  // Typing another host (a bridge on the PLC PC) rescans there once typing stops.
+  clearTimeout(_lpHostJob);
+  _lpHostJob=setTimeout(()=>{
+    const h=_lpHostOf(document.getElementById('lp-url').value).host;
+    if(h && h!==_lpScanHost) refreshBridgeSessions();
+  }, 900);
 });
 document.getElementById('btn-disconnect').addEventListener('click',()=>{
   if(wsConn)wsConn.close();liveValues={};setConnUI('idle','OFFLINE',null);drawGraph();renderTagList();
@@ -8096,6 +8927,7 @@ function parsePRN(text){
                : (ftype==='N') ? 'integer'
                : (ftype==='F') ? 'float'
                : (ftype==='S') ? 'status_narrative'
+               : (ftype==='R') ? 'control'
                : null;
       intOffset = 0;
       continue;
@@ -8196,6 +9028,27 @@ function parsePRN(text){
         const rawAddr = bm[1].trim().toUpperCase();
         const bits = bm[2].trim().split(/\s+/);
         if(bits.length === 16) emitBinWord(result, rawAddr, bits, ts);
+      }
+      continue;
+    }
+
+    // ── Control rows (R files — FFL/FFU/LFL/LFU/BSL/BSR/SQO/SQC) ──
+    // "R6:0      0  0  0  1  0  0  0  0      6      0  SILO #7 FIFO"
+    //  columns: EN EU DN EM ER UL IN FD   LEN   POS
+    if(section === 'control'){
+      const rm2 = line.match(/^(R\d+:\d+)\s+((?:[01]\s+){7}[01])\s+(-?\d+)\s+(-?\d+)/i);
+      if(rm2){
+        const addr = rm2[1].trim().toUpperCase();
+        const bits = rm2[2].trim().split(/\s+/).map(Number);
+        let ctlWord = 0;
+        FIFO_BITS.forEach((b,i)=>{
+          result[`${addr}/${b}`] = {value:bits[i], ts, prn:true};
+          if(bits[i]) ctlWord |= (1 << (15-i));   // EN=15 … FD=8
+        });
+        result[`${addr}.LEN`] = {value:parseInt(rm2[3]), ts, prn:true};
+        result[`${addr}.POS`] = {value:parseInt(rm2[4]), ts, prn:true};
+        // Bare element = the packed status word, as RSLogix prints it in .SLC
+        result[addr] = {value:ctlWord, ts, prn:true};
       }
       continue;
     }
@@ -8430,7 +9283,7 @@ async function _requestAllValuesFromBridge(tagNames, tagTypes, onProgress){
     }
   } finally {
     // Resume normal polling with the graph's watch list.
-    try{ wsConn.send(watchOnlyPayload(getWatchTags())); }catch(e){}
+    try{ _sendWatchList(getWatchTags()); }catch(e){}
     _saveReadInProgress = false;
   }
 
@@ -8501,7 +9354,20 @@ function _collectAllPlcTags(){
 // section titles) and replace only the numeric columns of recognised rows.
 function _rewritePRN(origText, liveSnap){
   if(!origText) return null;
-  const lines = origText.split(/\r?\n/);
+  // Split on LF/CRLF but REMEMBER each line's own terminator. RSLogix writes
+  // data lines with CRLF and blank lines with a bare LF; normalising everything
+  // to CRLF made a diff of original vs. saved file light up on ~1350 untouched
+  // lines. A bare CR (printer overstrike inside the status-file narrative) is
+  // not a separator here — it stays inside the line, as before.
+  const lines = [], eols = [];
+  {
+    const eolRe = /\r\n|\n/g;
+    let last = 0, m;
+    while((m = eolRe.exec(origText)) !== null){
+      lines.push(origText.slice(last, m.index)); eols.push(m[0]); last = eolRe.lastIndex;
+    }
+    lines.push(origText.slice(last)); eols.push('');
+  }
   let section = null;   // 'bin_word' | 'timer' | 'counter' | 'integer' | 'float' | 'status_narrative'
   let fileType = null;  // 'B' 'I' 'O' 'T' 'C' 'N' 'F' 'S'
   // Look up a value by address — tolerant to normalised vs. slot.word form.
@@ -8621,7 +9487,10 @@ function _rewritePRN(origText, liveSnap){
         // Token regex keeps column widths intact.
         const tokenRe = /(\s+)(-?\d+)/g;
         const tokens = [];
-        const rest2 = ' ' + rest; // sentinel so first token has leading whitespace
+        // Include the address-to-first-column gap in the padding budget: with a
+        // 1-char sentinel a value that grew wider could not eat into that gap and
+        // pushed the whole row right, breaking column alignment.
+        const rest2 = gap + rest;
         let m;
         while((m = tokenRe.exec(rest2)) !== null) tokens.push(m);
         // No numeric tokens → this is a "Usage" row ("N7:0   .   .   .") or
@@ -8638,9 +9507,11 @@ function _rewritePRN(origText, liveSnap){
           const pad2 = Math.max(ws.length - (newTok.length - num.length), 1);
           rebuilt += ' '.repeat(pad2) + newTok;
         }
-        // Strip the leading sentinel whitespace we added
-        if(rebuilt.startsWith(' ')) rebuilt = rebuilt.slice(1);
-        lines[li] = indent + baseAddr + gap + rebuilt;
+        // Copy through whatever follows the last number (RSLogix pads data
+        // rows with a trailing space) instead of dropping it.
+        const lastTok = tokens[tokens.length - 1];
+        rebuilt += rest2.slice(lastTok.index + lastTok[0].length);
+        lines[li] = indent + baseAddr + rebuilt;
       }
       continue;
     }
@@ -8653,7 +9524,7 @@ function _rewritePRN(origText, liveSnap){
         const baseNum = parseInt(baseAddr.match(/:(\d+)/)[1]);
         const filePfx = baseAddr.match(/^([A-Za-z]+\d*)/)[1];
         const tokenRe = /(\s+)(-?[\d.]+(?:[eE][+-]?\d+)?)/g;
-        const rest2 = ' ' + rest;
+        const rest2 = gap + rest;   // see integer branch - keeps column alignment
         const tokens = [];
         let m;
         while((m = tokenRe.exec(rest2)) !== null) tokens.push(m);
@@ -8669,13 +9540,14 @@ function _rewritePRN(origText, liveSnap){
           const pad2 = Math.max(ws.length - (newTok.length - num.length), 1);
           rebuilt += ' '.repeat(pad2) + newTok;
         }
-        if(rebuilt.startsWith(' ')) rebuilt = rebuilt.slice(1);
-        lines[li] = indent + baseAddr + gap + rebuilt;
+        const lastTok = tokens[tokens.length - 1];
+        rebuilt += rest2.slice(lastTok.index + lastTok[0].length);
+        lines[li] = indent + baseAddr + rebuilt;
       }
       continue;
     }
   }
-  return lines.join('\r\n');
+  return lines.map((s, i) => s + eols[i]).join('');
 }
 
 // ── L5X: rewrite source XML in-place with updated Data values ──

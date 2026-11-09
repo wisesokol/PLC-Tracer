@@ -25,7 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     from plc_bridge_500 import (
         Config, MemoryLogHandler, LogBuffer, set_debug_save,
-        SessionManager, DeviceStore, device_to_config,
+        SessionManager, DeviceStore, device_to_config, poll_interval_from,
+        build_http_app, AIOHTTP_OK, DEFAULT_HTTP,
         LIBPLCTAG_OK, WS_OK,
         _CYCLE_WARN_MS as CYCLE_WARN_MS,
     )
@@ -65,6 +66,11 @@ FILTER_THR = {"ALL":-1,"INFO":1,"WARN":2,"ERROR":3}
 
 ALL_SESSIONS = "ALL"
 
+# Longest the closing window waits for its sessions to stop. A stop takes
+# milliseconds; this only bounds a WebSocket client that never answers the
+# close. Whatever is still open past it is shut down at exit by the bridge.
+CLOSE_WAIT_S = 5.0
+
 
 # ── Bridge controller ─────────────────────────────────────────────────────────
 class BridgeController:
@@ -95,6 +101,12 @@ class BridgeController:
         self.loop = asyncio.new_event_loop()
         threading.Thread(target=self.loop.run_forever, daemon=True).start()
         self._submit(self._ui_loop())
+        # The panel used to be WebSocket-only, so /sessions existed for the CLI
+        # bridge and not for the GUI one. The tracer's connect dialog lists the
+        # running controllers over REST (it is the only way to see a session on
+        # a port outside the default range), so the GUI serves it too.
+        self._http_runner = None
+        self._submit(self._start_http())
 
     # ── Public (GUI thread) ───────────────────────────────────────────────────
     def _submit(self, coro):
@@ -107,12 +119,29 @@ class BridgeController:
         self._submit(self._stop(name))
 
     def stop_all(self):
-        self._submit(self._stop_all())
+        return self._submit(self._stop_all())
 
     def apply_and_reconnect(self, name, fields):
         self._submit(self._apply(name, fields))
 
     # ── Async internals ───────────────────────────────────────────────────────
+    async def _start_http(self):
+        """REST API on 8766 — best effort, the panel works without it."""
+        if not AIOHTTP_OK:
+            return
+        try:
+            from aiohttp import web
+            runner = web.AppRunner(build_http_app(self.mgr, self.log_buf))
+            await runner.setup()
+            await web.TCPSite(runner, "0.0.0.0", DEFAULT_HTTP).start()
+            self._http_runner = runner
+            logging.getLogger("bridge500").info(
+                f"HTTP REST  → http://localhost:{DEFAULT_HTTP}")
+        except Exception as e:
+            # Another bridge already owns the port, or the port is blocked —
+            # not fatal, WebSocket sessions are unaffected.
+            logging.getLogger("bridge500").warning(f"HTTP REST not started: {e}")
+
     async def _start(self, name, cfg):
         self.q.put(("busy", name))
         try:
@@ -131,6 +160,9 @@ class BridgeController:
         self.q.put(("stopped", name))
 
     async def _stop_all(self):
+        # The REST server outlives this: "Stop all" is a button, and starting a
+        # session again afterwards must still be visible to the tracer. It goes
+        # away with the process.
         await self.mgr.stop_all()
         self.q.put(("stopped", ""))
 
@@ -158,6 +190,9 @@ class BridgeController:
             # Handles carry their connection id from creation, so switching the
             # count means rebuilding them — the connection itself stays up.
             await s.conn.update_conn_groups(f["groups"])
+        if "io_block" in f and bool(f["io_block"]) != bool(getattr(cfg, "io_block", False)):
+            # Takes effect on the next cycle; the connection stays up.
+            await s.conn.update_io_block(bool(f["io_block"]))
         if f.get("port") and f["port"] != cfg.port_ws:
             # The port is the address a browser tab is already pointed at, so it
             # is never moved under a live session.
@@ -308,7 +343,19 @@ class App(tk.Tk):
         r2b.pack(fill=tk.X, pady=(0, 12))
         _lbl(r2b, "Records folder").pack(side=tk.LEFT)
         self._v_recdir = tk.StringVar(value=self.bridge.records_dir)
-        _entry(r2b, self._v_recdir, width=44).pack(side=tk.LEFT, padx=(4, 0))
+        _entry(r2b, self._v_recdir, width=44).pack(side=tk.LEFT, padx=(4, 18))
+
+        # SLC: the whole I/O image in one request per I and O file instead of
+        # one per I/O word. The slot layout comes from the tracer's .SLC project.
+        self._v_ioblk = tk.BooleanVar(value=False)
+        self._cb_ioblk = tk.Checkbutton(r2b, text="Read I/O as block (SLC)",
+                                        variable=self._v_ioblk,
+                                        bg=CARD, fg=TEXT, selectcolor="#06090e",
+                                        activebackground=CARD, activeforeground=TEXT,
+                                        disabledforeground=TEXT2, font=MONO9)
+        self._cb_ioblk.pack(side=tk.LEFT)
+        self._ioblk_keep = False      # the box as it was before Logix was picked
+        self._v_type.trace_add("write", self._sync_ioblk)
 
         # Row 3 — buttons
         r3 = tk.Frame(p, bg=CARD)
@@ -534,10 +581,11 @@ class App(tk.Tk):
             "ip":       self._v_ip.get().strip(),
             "slot":     int(self._v_slot.get() or 0),
             "type":     self._v_type.get(),
-            "interval": max(0.2, float(self._v_iv.get() or 0.2)),
+            "interval": poll_interval_from(self._v_iv.get()),
             "groups":   max(0, min(16, int(self._v_groups.get() or 0))),
             "port":     max(0, min(65535, int(self._v_port.get() or 0))),
             "rslinx":   self._v_rslinx.get(),
+            "io_block": self._v_ioblk.get() and self._v_type.get() != "logix",
             "records_dir": self._v_recdir.get().strip(),
         }
 
@@ -546,6 +594,7 @@ class App(tk.Tk):
             "ip": f["ip"], "slot": f["slot"], "type": f["type"],
             "interval": f["interval"], "groups": f["groups"],
             "port": f["port"], "rslinx": f["rslinx"],
+            "io_block": f["io_block"],
         })
         if f.get("records_dir"):
             cfg.records_dir = f["records_dir"]
@@ -647,6 +696,23 @@ class App(tk.Tk):
         self._v_groups.set(str(d.get("groups", 0)))
         self._v_port.set(str(d.get("port", 0)))
         self._v_rslinx.set(d["rslinx"])
+        if d["type"] != "logix":                 # Logix keeps the box cleared
+            self._v_ioblk.set(bool(d.get("io_block", False)))
+
+    def _sync_ioblk(self, *_):
+        """Read I/O as block is an SLC/MicroLogix mode — Logix has no I/O image
+        to read in one request (tags go by name, libplctag packs them). Picking
+        Logix greys the box out and clears it; picking SLC again gives back
+        what it held."""
+        logix = self._v_type.get() == "logix"
+        greyed = str(self._cb_ioblk["state"]) == tk.DISABLED
+        if logix and not greyed:
+            self._ioblk_keep = self._v_ioblk.get()
+            self._v_ioblk.set(False)
+            self._cb_ioblk.config(state=tk.DISABLED)
+        elif not logix and greyed:
+            self._cb_ioblk.config(state=tk.NORMAL)
+            self._v_ioblk.set(self._ioblk_keep)
 
     def _hint(self, text: str, ms: int = 5000):
         self._lbl_hint.config(text=text)
@@ -681,7 +747,8 @@ class App(tk.Tk):
             return
         dev = {"name": "", "ip": f["ip"], "slot": f["slot"], "type": f["type"],
                "interval": f["interval"], "groups": f["groups"],
-               "port": f["port"], "rslinx": f["rslinx"]}
+               "port": f["port"], "rslinx": f["rslinx"],
+               "io_block": f["io_block"]}
 
         cur  = self._selected_dev()
         name = _ask_name(self, "Save device", "Device name:",
@@ -770,6 +837,11 @@ class App(tk.Tk):
         for r in rows:
             if r["connected"]:
                 status, tag = f"CONNECTED  {r['controller'].get('name','')}".strip(), "ok"
+            elif r.get("crashed"):
+                # The poll loop died with the port still open and tabs still
+                # attached. Amber would read as "coming up"; this one is not
+                # coming up on its own — it needs Stop → Start.
+                status, tag = f"POLLING STOPPED — {r['crashed']}", "bad"
             elif r["running"]:
                 status, tag = (r["error"] or "connecting…"), "warn"
             else:
@@ -836,6 +908,8 @@ class App(tk.Tk):
             self._v_groups.set(str(st.get("groups", 0)))
             self._v_port.set(str(st["ws_port"]))
             self._v_rslinx.set(bool(st.get("rslinx")))
+            if st["type"] != "logix":
+                self._v_ioblk.set(bool(st.get("io_block")))
         self._sync_sel_widgets()
 
     def _sync_sel_widgets(self):
@@ -956,8 +1030,19 @@ class App(tk.Tk):
         t.config(state=tk.DISABLED)
 
     def on_close(self):
-        self.bridge.stop_all()
-        self.after(600, self.destroy)
+        # Gone from the screen at once, but the interpreter ends only after the
+        # sessions are really down. A fixed 600 ms used to end it while a
+        # session was still stopping, with its libplctag handles still open.
+        self.withdraw()
+        done = self.bridge.stop_all()
+        deadline = time.monotonic() + CLOSE_WAIT_S
+
+        def wait():
+            if done.done() or time.monotonic() >= deadline:
+                self.destroy()
+            else:
+                self.after(50, wait)
+        wait()
 
 
 # ── Cycle readout ─────────────────────────────────────────────────────────────
@@ -966,6 +1051,9 @@ def _cycle_text(st: dict):
     sessions table so both tell the same story."""
     if not st.get("connected"):
         return "", TEXT2
+    if st.get("paused"):
+        # Connected, but nothing is read until a tab (or an HTTP reader) attaches.
+        return "Polling paused — no clients", TEXT2
     cycle = st.get("cycle_ms") or 0.0
     interval = st.get("interval") or 0.0
     timeouts = st.get("timeouts") or 0

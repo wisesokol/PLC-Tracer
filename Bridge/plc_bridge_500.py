@@ -25,14 +25,59 @@ Requirements:
     plctag.dll in Bridge/libplctag_2.6.16_windows_x64/
 """
 
-import asyncio, collections, json, logging, argparse, os, re, socket, sys, time, zlib
+import asyncio, atexit, collections, json, logging, argparse, os, re, socket, sys, threading, time, zlib
 from pathlib import Path
+
+# ── Where files live ─────────────────────────────────────────────────────────
+# Running from source, everything sits next to this file. Inside a PyInstaller
+# build the two halves split: read-only payload (plctag.dll) is unpacked into a
+# private folder (sys._MEIPASS — a temp dir that is deleted on exit for a
+# one-file build), while anything the user must find, edit or keep — the device
+# presets, the recordings — has to live next to the .exe instead. Writing them
+# into _MEIPASS would silently throw away every saved device and recording.
+FROZEN = bool(getattr(sys, "frozen", False))
+
+def res_path(*parts) -> Path:
+    """Read-only file shipped with the build."""
+    base = getattr(sys, "_MEIPASS", None)
+    return Path(base or Path(__file__).resolve().parent).joinpath(*parts)
+
+def data_path(*parts) -> Path:
+    """User-visible file: beside the .exe when frozen, beside the source if not."""
+    base = Path(sys.executable).resolve().parent if FROZEN \
+           else Path(__file__).resolve().parent
+    return base.joinpath(*parts)
+
+# Console output must never kill the bridge. The start-up banner and the log
+# lines contain non-ASCII (arrows, Russian), and a Windows console or a
+# redirected stdout in the ANSI codepage raises UnicodeEncodeError on them —
+# which used to take the whole process down right after the sessions started.
+# A windowed build has no console at all: there sys.stdout/stderr are None and
+# every logging call would blow up inside the handler, so they get a sink.
+if FROZEN:
+    for _name in ("stdout", "stderr"):
+        if getattr(sys, _name, None) is None:
+            try:
+                setattr(sys, _name, open(os.devnull, "w", encoding="utf-8"))
+            except Exception:
+                pass
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # ── libplctag (SLC 5/05, MicroLogix via PCCC + ControlLogix/CompactLogix via CIP) ─────────────────────
 try:
     import ctypes
-    _dll_dir = Path(__file__).parent / "libplctag_2.6.16_windows_x64"
-    _dll_path = str(_dll_dir / "plctag.dll")
+    # Next to the .exe first: that copy is replaceable without a rebuild, which
+    # is the whole point of shipping the driver as a file. The bundled one is
+    # the fallback (and the only one that exists when running from source).
+    _dll_name = "libplctag_2.6.16_windows_x64"
+    _dll_path = next((str(p) for p in (data_path(_dll_name, "plctag.dll"),
+                                       res_path(_dll_name, "plctag.dll"))
+                      if p.is_file()), str(res_path(_dll_name, "plctag.dll")))
+    _dll_dir = Path(_dll_path).parent
     _libplctag = ctypes.cdll.LoadLibrary(_dll_path)
 
     # --- function signatures ---
@@ -111,6 +156,23 @@ try:
     except AttributeError:
         _LIBPLCTAG_HAS_SET_ATTR = False
 
+    # Cancel a request whose reply is not coming. Without it a lost reply kept
+    # its tag "in flight" for the life of the connection.
+    try:
+        _libplctag.plc_tag_abort.argtypes = [ctypes.c_int32]
+        _libplctag.plc_tag_abort.restype  = ctypes.c_int
+        _LIBPLCTAG_HAS_ABORT = True
+    except AttributeError:
+        _LIBPLCTAG_HAS_ABORT = False
+
+    # Library teardown — see _libplctag_teardown for why the bridge calls it.
+    try:
+        _libplctag.plc_tag_shutdown.argtypes = []
+        _libplctag.plc_tag_shutdown.restype  = None
+        _LIBPLCTAG_HAS_SHUTDOWN = True
+    except AttributeError:
+        _LIBPLCTAG_HAS_SHUTDOWN = False
+
     LIBPLCTAG_OK = True
     PLCTAG_STATUS_OK = 0
     PLCTAG_STATUS_PENDING = 1
@@ -126,7 +188,56 @@ except Exception as _e:
     _LIBPLCTAG_HAS_STRING = False
     _LIBPLCTAG_HAS_RAW = False
     _LIBPLCTAG_HAS_SET_ATTR = False
+    _LIBPLCTAG_HAS_ABORT = False
+    _LIBPLCTAG_HAS_SHUTDOWN = False
     print(f"[WARN] libplctag not loaded: {_e}")
+
+
+def _libplctag_teardown():
+    """Shut libplctag down while its own threads are still running.
+
+    plctag.dll runs the same teardown by itself from its exit handler, but that
+    one fires while Windows unloads the DLL — after every other thread of the
+    process, the library's I/O threads included, is already gone — and it waits
+    for those threads to close their sessions. With a single tag still open the
+    wait never ends: the window is gone, the .exe stays in the task list, and
+    not even taskkill /F can end it (Windows already counts it as exiting).
+
+    Run from atexit — after Python has joined the executor threads, so no read
+    can open a new tag behind it — and from the console handler below. The
+    DLL's own call then finds nothing left to do.
+    """
+    if _LIBPLCTAG_HAS_SHUTDOWN:
+        try:
+            _libplctag.plc_tag_shutdown()
+        except Exception:
+            pass
+
+atexit.register(_libplctag_teardown)
+
+# Closing the console window (the CLI's X button), logoff and shutdown never
+# reach the interpreter's exit: Windows ends the process straight from a console
+# control handler, so atexit does not run and the DLL's teardown hung until
+# Windows killed the process 5 s later. Same teardown, run first; returning 0
+# leaves the ending of the process to the default handler.
+# Ctrl+Break takes that same road: Python has no handler for it, so the default
+# one ends the process at once — with tags open that left a process no user
+# could kill (its last thread is the system's handler thread), holding the
+# WebSocket and REST ports until a reboot. Ctrl+C is not in the list: Python
+# turns it into KeyboardInterrupt and the bridge stops its sessions itself.
+if LIBPLCTAG_OK and os.name == "nt":
+    _CTRL_END_EVENTS = (1, 2, 5, 6)     # CTRL_BREAK, CTRL_CLOSE, CTRL_LOGOFF, CTRL_SHUTDOWN
+
+    @ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_uint)
+    def _console_ctrl(event):
+        if event in _CTRL_END_EVENTS:
+            _libplctag_teardown()
+        return 0
+
+    try:
+        ctypes.windll.kernel32.SetConsoleCtrlHandler(_console_ctrl, True)
+    except Exception:
+        pass
 
 # Transient read conditions: the handle is still perfectly good, only this
 # cycle's read did not finish in time. Destroying the handle here used to start
@@ -134,6 +245,26 @@ except Exception as _e:
 # made that cycle slower still, so the timeouts fed themselves until the user
 # shrank the scene. Keep the handle: the in-flight read lands a few ms later.
 _SOFT_READ_ERRS = frozenset({PLCTAG_ERR_TIMEOUT, PLCTAG_ERR_BUSY})
+
+# Read errors that are the CONTROLLER's answer: the request crossed the link and
+# came back refused — bad address, a block longer than it will serve, a reply of
+# the wrong size. Only these may shrink an SLC block (see _slc_shrink): a dropped
+# connection, a socket error or a cancelled request says nothing about what the
+# PLC accepts. Numbers as libplctag.h has them, checked against
+# plc_tag_decode_error of the bundled 2.6.16 DLL.
+_REFUSAL_ERRS = frozenset({
+    -4,    # PLCTAG_ERR_BAD_DATA
+    -8,    # PLCTAG_ERR_BAD_REPLY
+    -9,    # PLCTAG_ERR_BAD_STATUS
+    -18,   # PLCTAG_ERR_NOT_ALLOWED
+    -19,   # PLCTAG_ERR_NOT_FOUND
+    -21,   # PLCTAG_ERR_NO_DATA
+    -27,   # PLCTAG_ERR_OUT_OF_BOUNDS
+    -29,   # PLCTAG_ERR_REMOTE_ERR
+    -33,   # PLCTAG_ERR_TOO_LARGE
+    -34,   # PLCTAG_ERR_TOO_SMALL
+    -35,   # PLCTAG_ERR_UNSUPPORTED
+})
 
 try:
     import aiohttp
@@ -145,9 +276,12 @@ except ImportError:
 
 try:
     import websockets
+    from websockets.exceptions import ConnectionClosed as _WsClosed
     WS_OK = True
+    _WS_CLOSED = (_WsClosed,)
 except ImportError:
     WS_OK = False
+    _WS_CLOSED = ()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S")
 LOG_ROOT = "bridge500"
@@ -212,8 +346,27 @@ class MemoryLogHandler(logging.Handler):
 DEFAULT_WS   = 8765
 DEFAULT_HTTP = 8766
 POLL_IV      = 0.2
+POLL_IV_MIN  = 0.01   # the shortest pause between poll cycles any setter accepts
 MAX_BATCH    = 40
 RECONNECT    = 5
+
+
+def poll_interval_from(value, default: float = POLL_IV) -> float:
+    """Seconds between poll cycles, from whatever sets them: the GUI field, a
+    saved preset, the CLI, set_interval over WebSocket, REST. Missing or blank
+    gives `default`; anything under POLL_IV_MIN is raised to it. A decimal comma
+    is taken as typed ("0,05"); text that is not a number raises ValueError, as
+    float() does.
+
+    On Windows the pause comes out about 10 ms longer than asked — the event
+    loop wakes on the system timer tick: 0.01 s measured 0.020 s, 0.2 s 0.211 s.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return default
+    v = float(value.replace(",", ".") if isinstance(value, str) else value)
+    if v != v or v in (float("inf"), float("-inf")):
+        raise ValueError(f"poll interval {value!r} is not a number of seconds")
+    return max(POLL_IV_MIN, v)
 
 # SLC 500 data file prefixes that are physical I/O
 PHYSICAL_PREFIXES = ('I:', 'O:', 'I/', 'O/')
@@ -245,21 +398,32 @@ class Config:
         # Low for a serial-gateway link (bytes are the cost), high for a direct
         # Ethernet connection (requests are the cost). See _SLC_GAP_BYTES.
         self.slc_gap_bytes = _SLC_GAP_BYTES
+        # SLC/PCCC: read the I/O image in block requests too (one per I and O
+        # file instead of one per I/O word). Needs the slot layout, which the
+        # tracer sends from its .SLC project with every watch list. Opt-in per
+        # controller — GUI checkbox, "io_block": true in the device preset.
+        self.io_block      = False
         self.watched_tags  = []
         self.slc_path      = ""        # loaded .SLC / .APS file for tag list
         self.port_ws       = DEFAULT_WS
         self.port_http     = DEFAULT_HTTP
-        self.records_dir   = str(Path(__file__).parent / "RECORDS")
+        self.records_dir   = str(data_path("RECORDS"))
 
     def build_ip_path(self):
         return self.ip   # libplctag builds gateway= from plain IP
 
-    def save(self, path="config500.json"):
+    # No path given → beside the .exe (or the source). A bare "config500.json"
+    # used to resolve against the working directory, which for a double-clicked
+    # shortcut is wherever the shortcut points.
+    def save(self, path=None):
+        path = path or data_path("config500.json")
         with open(path,"w") as f: json.dump(self.__dict__,f,indent=2)
         log.info(f"Config saved → {path}")
 
-    def load(self, path="config500.json"):
+    def load(self, path=None):
+        path = path or data_path("config500.json")
         with open(path) as f: self.__dict__.update(json.load(f))
+        self.poll_interval = poll_interval_from(self.poll_interval)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,16 +431,19 @@ class Config:
 # ─────────────────────────────────────────────────────────────────────────────
 # Saved devices — named connection presets shared by the GUI and the CLI
 # ─────────────────────────────────────────────────────────────────────────────
-DEV_FILE = Path(__file__).parent / "plc_bridge_devices.json"
+DEV_FILE = data_path("plc_bridge_devices.json")
 
 
 class DeviceStore:
     """Named connection presets ("devices"), persisted next to the script.
 
     File: {"version":1, "last":<name>, "devices":[{name, ip, slot, type,
-    interval, groups, port, rslinx}, ...]}.  A missing or broken file degrades
-    to an empty list — the panel must stay usable without it, this is a
-    convenience feature and never a precondition for connecting.
+    interval, groups, port, rslinx[, io_block]}, ...]}.  A missing or broken
+    file degrades to an empty list — the panel must stay usable without it, this
+    is a convenience feature and never a precondition for connecting.
+
+    Optional settings are written only when switched on: a preset without the
+    key reads as off, so files saved before a setting existed load unchanged.
 
     It lives here rather than in the GUI because the headless bridge starts the
     same presets:  python plc_bridge_500.py --plc Line1 --plc Line2
@@ -329,12 +496,12 @@ class DeviceStore:
     # ── contents ──────────────────────────────────────────────────────────────
     @staticmethod
     def _norm(d: dict) -> dict:
-        return {
+        dev = {
             "name":     str(d.get("name", "")).strip(),
             "ip":       str(d.get("ip", "")).strip(),
             "slot":     int(d.get("slot", 0) or 0),
             "type":     "logix" if str(d.get("type", "slc")).lower() == "logix" else "slc",
-            "interval": max(0.2, float(d.get("interval", 0.2) or 0.2)),
+            "interval": poll_interval_from(d.get("interval")),
             # Parallel CIP connections; 0 = auto. Presets written before this
             # setting existed simply come back as auto.
             "groups":   max(0, min(16, int(d.get("groups", 0) or 0))),
@@ -344,6 +511,10 @@ class DeviceStore:
             "port":     max(0, min(65535, int(d.get("port", 0) or 0))),
             "rslinx":   bool(d.get("rslinx", False)),
         }
+        # I/O image in block reads (SLC). Present only when on — no key, no mode.
+        if bool(d.get("io_block", False)):
+            dev["io_block"] = True
+        return dev
 
     @staticmethod
     def label(d: dict) -> str:
@@ -378,6 +549,36 @@ class DeviceStore:
         return self.save()
 
 
+# Cache for saved_device_for() — the device file is re-read only when it
+# changes on disk, because status() runs once per GUI tick per session.
+_DEV_CACHE = {"mtime": None, "store": None}
+
+
+def saved_device_for(cfg: "Config", name: str):
+    """The preset in plc_bridge_devices.json a running session came from.
+
+    Matched by session name first (that is what --plc / the GUI pass), then by
+    ip+slot+type for ad-hoc sessions started with --ip that happen to describe a
+    saved controller. Returns None for a session that is not in the file — the
+    UI then shows its port number instead of a name.
+    """
+    try:
+        mtime = DEV_FILE.stat().st_mtime
+    except OSError:
+        mtime = None
+    if _DEV_CACHE["store"] is None or _DEV_CACHE["mtime"] != mtime:
+        _DEV_CACHE["store"] = DeviceStore()
+        _DEV_CACHE["mtime"] = mtime
+    store = _DEV_CACHE["store"]
+    dev = store.find(name)
+    if dev:
+        return dev
+    return next((d for d in store.devices
+                 if d["ip"] == cfg.ip
+                 and int(d["slot"]) == int(cfg.slot)
+                 and d["type"] == cfg.controller_type), None)
+
+
 def device_to_config(dev: dict, base: "Config" = None) -> "Config":
     """Turn a saved preset into the Config one PlcSession runs on."""
     cfg = base or Config()
@@ -385,9 +586,10 @@ def device_to_config(dev: dict, base: "Config" = None) -> "Config":
     cfg.slot            = int(dev.get("slot", cfg.slot) or 0)
     cfg.controller_type = dev.get("type", cfg.controller_type)
     cfg.processor_type  = "Logix5000" if cfg.controller_type == "logix" else "SLC"
-    cfg.poll_interval   = max(0.2, float(dev.get("interval", cfg.poll_interval) or 0.2))
+    cfg.poll_interval   = poll_interval_from(dev.get("interval"), cfg.poll_interval)
     cfg.conn_groups     = int(dev.get("groups", cfg.conn_groups) or 0)
     cfg.via_rslinx      = bool(dev.get("rslinx", False))
+    cfg.io_block        = bool(dev.get("io_block", False))
     # 0 means "auto" here — SessionManager picks the first free port.
     cfg.port_ws         = int(dev.get("port", 0) or 0)
     if dev.get("records_dir"):
@@ -542,18 +744,27 @@ def rec_stop_if_owner(websocket):
 # ─────────────────────────────────────────────────────────────────────────────
 import re as _re
 
-# Timer/Counter word layout (byte offsets within a 6-byte element, elem_size=6)
+# Timer/Counter/Control word layout (byte offsets in a 6-byte element, elem_size=6)
 # Word 0 (bytes 0-1): control/status bits
-# Word 1 (bytes 2-3): PRE (preset)
-# Word 2 (bytes 4-5): ACC (accumulated)
-_TC_BYTE_OFF = {'PRE': 2, 'LEN': 2, 'ACC': 4}
+# Word 1 (bytes 2-3): PRE (timer/counter preset)   | LEN (control length)
+# Word 2 (bytes 4-5): ACC (timer/counter accum)    | POS (control position)
+# The keys are shared across T/C/R because the paired members sit in the same
+# word in all three element types.
+_TC_BYTE_OFF = {'PRE': 2, 'LEN': 2, 'ACC': 4, 'POS': 4}
 
-# Timer/Counter status bits in word 0 (bit positions)
+# Timer/Counter/Control status bits in word 0 (bit positions)
 _T_BITS = {'EN': 15, 'TT': 14, 'DN': 13}
 _C_BITS = {'CU': 15, 'CD': 14, 'DN': 13, 'OV': 12, 'UN': 11}
+# CONTROL (R file) — used by FFL/FFU/LFL/LFU, BSL/BSR, SQO/SQC/SQL.
+# Same order as the Logix 32-bit layout in _LGX_STRUCT_BITS['CONTROL'],
+# shifted into the top half of a 16-bit word.
+_R_BITS = {'EN': 15, 'EU': 14, 'DN': 13, 'EM': 12, 'ER': 11, 'UL': 10, 'IN': 9, 'FD': 8}
 
-# Slash-notation aliases for timer/counter status bits
-_TC_SLASH_BITS = {**_T_BITS, **_C_BITS}
+# Per-prefix status-bit maps for the 6-byte element types
+_STRUCT_BITS = {'T': _T_BITS, 'C': _C_BITS, 'R': _R_BITS}
+
+# Slash-notation aliases for timer/counter/control status bits
+_TC_SLASH_BITS = {**_T_BITS, **_C_BITS, **_R_BITS}
 
 # Updated regex:
 #   group 1: letter prefix (one or more letters, e.g. T, C, N, B, F, I, O, S)
@@ -672,10 +883,11 @@ def _slc_parse_addr(name: str):
 def _slc_tag_path(ip: str, slot: int, name: str) -> str | None:
     """Build libplctag connection string for an SLC 5/05 / MicroLogix tag.
 
-    Key insight for Timer/Counter (T, C files):
-      libplctag SLC driver addresses T/C by ELEMENT number, not word offset.
-      Each T/C element is 3 words (6 bytes).  We read the whole element
+    Key insight for Timer/Counter/Control (T, C, R files):
+      libplctag SLC driver addresses T/C/R by ELEMENT number, not word offset.
+      Each element is 3 words (6 bytes).  We read the whole element
       (elem_size=6, elem_count=1) and extract sub-fields in _slc_read_value.
+      R (CONTROL) is laid out identically: status word, LEN, POS.
 
     Returns None if the address can't be parsed.
     """
@@ -684,8 +896,8 @@ def _slc_tag_path(ip: str, slot: int, name: str) -> str | None:
         return None
     prefix, file_num, element, bit, sub = parsed
 
-    if prefix in ('T', 'C'):
-        # Always read the full 6-byte (3-word) timer/counter element.
+    if prefix in ('T', 'C', 'R'):
+        # Always read the full 6-byte (3-word) timer/counter/control element.
         # Sub-field extraction happens in _slc_read_value via byte offsets.
         return (f"protocol=ab-eip&gateway={ip}&cpu=SLC"
                 f"&elem_size=6&elem_count=1"
@@ -710,7 +922,8 @@ def _slc_tag_path(ip: str, slot: int, name: str) -> str | None:
     elif prefix == 'F':
         elem_size = 4
     else:
-        # N, B, I, O, S, R, A — all 16-bit words
+        # N, B, I, O, S, A — all 16-bit words (R is handled above as a 6-byte
+        # CONTROL element, alongside T and C)
         elem_size = 2
 
     return (f"protocol=ab-eip&gateway={ip}&cpu=SLC"
@@ -1076,7 +1289,10 @@ _SLC_BLOCK_SENTINEL = "\x00BLK"
 
 # Bytes per element, matching what _slc_tag_path builds for a single element —
 # block extraction must land on exactly the same layout.
-_SLC_ELEM_SIZE = {'T': 6, 'C': 6, 'F': 4}
+# 'R' must be here as well as in _slc_tag_path: without it the block planner
+# strides R elements by 2 bytes and every element after the first is read from
+# inside its predecessor — wrong values, no error.
+_SLC_ELEM_SIZE = {'T': 6, 'C': 6, 'R': 6, 'F': 4}
 
 # Payload ceiling per PCCC read. An SLC 5/05 tops out around 236 bytes of data
 # per request; 224 keeps a margin for the reply header while filling the packet.
@@ -1084,6 +1300,18 @@ _SLC_ELEM_SIZE = {'T': 6, 'C': 6, 'F': 4}
 # that file is halved on the spot (see _slc_block_cap).
 _SLC_BLOCK_BYTES = 224
 _SLC_BLOCK_BYTES_MIN = 16     # 8 words — below this a block barely beats singles
+
+# A block is cut down only when the controller refuses it this many cycles in a
+# row: a one-off refusal on a busy line must not cost the file its block size.
+_SLC_REFUSALS_TO_SHRINK = 3
+# One plain word every SLC / MicroLogix has (the connect probe reads it too):
+# read beside blocks that were all refused, it tells a block the controller will
+# not serve from a controller that answers nothing at all.
+_SLC_PROBE = "S2:0"
+# A cut-down file tries its previous size again after this long without a
+# refusal; a try that is refused again doubles the wait, up to the ceiling.
+_SLC_REGROW_S = 300.0
+_SLC_REGROW_MAX_S = 3600.0
 
 # Bytes of unwanted data worth carrying inside a block to avoid one more
 # request. This is the whole trade, and its answer depends on the link:
@@ -1096,6 +1324,25 @@ _SLC_BLOCK_BYTES_MIN = 16     # 8 words — below this a block barely beats sing
 # the setup that is measurably sensitive. Raise Config.slc_gap_bytes on a
 # directly connected controller.
 _SLC_GAP_BYTES = 16
+
+# I/O image block reads (Config.io_block). A hole wider than one maximal SLC card
+# (32 words = 64 bytes, roughly what one request costs on a 19200-baud line)
+# splits the block — up to that, carrying another card's words is cheaper than
+# asking twice.
+_SLC_IO_GAP_WORDS = 32
+# A block is trusted only after its words agree with the same words read one by
+# one. One disagreement can be an input that changed between the two reads; the
+# same word disagreeing this many checks in a row means the slot layout is wrong.
+_IO_CHECK_MISMATCHES = 3
+_IO_CHECK_MAX_TRIES = 10      # checks without one clean pass → give up on the file
+# Two reads of a word further apart than this tell nothing about which of its
+# bits are moving right now (see LibplctagConnection._io_settle).
+_IO_MOVE_WINDOW_S = 10.0
+# A confirmed block is compared again this often. A layout that is one card off
+# passes a check whenever the shifted words happen to hold equal values (an idle
+# machine: all zeros), so the check has to come back while the plant runs. One
+# slow cycle a minute costs about 1 % of the update rate.
+_IO_RECHECK_S = 60.0
 
 
 def _slc_block_elem_size(prefix: str) -> int:
@@ -1115,6 +1362,19 @@ def _slc_parse_block_key(key: str):
     if not parsed:
         return None
     return head, _slc_block_elem_size(parsed[0]), int(cnt)
+
+
+def _slc_block_file(key: str):
+    """Block cache key → its data file (prefix, file_num), or None."""
+    blk = _slc_parse_block_key(key)
+    parsed = _slc_parse_addr(blk[0]) if blk else None
+    return (parsed[0], parsed[1]) if parsed else None
+
+
+def _phys_label(name: str) -> str:
+    """A physical read as the log prints it: N7:0 ×28, MyTimer(struct)."""
+    return (name.replace(_LGX_STRUCT_SENTINEL, '(struct)')
+                .replace(_SLC_BLOCK_SENTINEL, ' ×'))
 
 
 def _plan_slc_blocks(names, skip_files=(), cap_for=None, gap_bytes=None):
@@ -1184,13 +1444,93 @@ def _plan_slc_blocks(names, skip_files=(), cap_for=None, gap_bytes=None):
     return plan
 
 
+def _slc_io_word(name: str):
+    """(prefix, file_num, slot, word) for an I/O word address like I:3.0, else None."""
+    parsed = _slc_parse_addr(name)
+    if not parsed:
+        return None
+    prefix, file_num, slot, bit, sub = parsed
+    if prefix not in ('I', 'O') or bit is not None:
+        return None
+    if not (isinstance(sub, str) and sub.startswith('W')):
+        return None
+    return prefix, file_num, slot, int(sub[1:])
+
+
+def _plan_slc_io_blocks(names, io_slots, skip_files=()):
+    """Group SLC I/O words into block reads, given the rack's word layout.
+
+    The input and the output image are packed slot after slot, each slot taking
+    the words the I/O configuration gives it — `io_slots` = {slot: (input_words,
+    output_words)}, the SCAN_IN / SCAN_OUT columns of a .SLC export. So I:6.0
+    follows I:3.0 directly when slots 4 and 5 hold output cards, and a run of
+    I/O words is one request, like a run of N7. Without the layout the word after
+    I:3.0 cannot be named, which is why _plan_slc_blocks leaves I/O alone.
+
+    Returns {phys_name: (block_key, byte_offset)} like _plan_slc_blocks. A block
+    runs from the first to the last wanted word of a file — the holes are other
+    cards' words, a few bytes against a request saved — and is split only past
+    the payload cap or across a hole wider than _SLC_IO_GAP_WORDS. Words the
+    layout does not place (unknown slot, a word past its card) keep their own
+    request; the controller answers those exactly as before.
+    """
+    by_file = {}
+    for name in names:
+        io = _slc_io_word(name)
+        if io is None:
+            continue
+        prefix, file_num, slot, word = io
+        if (prefix, file_num) in skip_files:
+            continue
+        side = 0 if prefix == 'I' else 1
+        if word >= io_slots.get(slot, (0, 0))[side]:
+            continue
+        by_file.setdefault((prefix, file_num), []).append((slot, word, name))
+
+    plan = {}
+    max_words = _SLC_BLOCK_BYTES // 2
+    for (prefix, file_num), items in by_file.items():
+        if len(items) < 2:
+            continue                      # one word is already one request
+        side = 0 if prefix == 'I' else 1
+        first, at = {}, 0                 # image offset of each slot's word 0
+        for s in sorted(io_slots):
+            first[s] = at
+            at += io_slots[s][side]
+
+        def pos(item):
+            return first[item[0]] + item[1]
+
+        def flush(run):
+            if len(run) < 2:
+                return
+            base = pos(run[0])
+            key = (f"{prefix}:{run[0][0]}.{run[0][1]}"
+                   f"{_SLC_BLOCK_SENTINEL}{pos(run[-1]) - base + 1}")
+            for item in run:
+                plan[item[2]] = (key, (pos(item) - base) * 2)
+
+        items.sort(key=pos)
+        run = [items[0]]
+        for item in items[1:]:
+            if (pos(item) - pos(run[0]) + 1 > max_words
+                    or pos(item) - pos(run[-1]) - 1 > _SLC_IO_GAP_WORDS):
+                flush(run)
+                run = [item]
+            else:
+                run.append(item)
+        flush(run)
+    return plan
+
+
 def _slc_read_value(tag_handle: int, name: str, base_off: int = 0):
     """Extract typed value from a libplctag tag handle.
 
-    Timer/Counter layout (elem_size=6, elem_count=1):
-      bytes 0-1  word 0  control/status bits  (EN/TT/DN or CU/CD/DN/OV/UN)
-      bytes 2-3  word 1  PRE (preset)
-      bytes 4-5  word 2  ACC (accumulated)
+    Timer/Counter/Control layout (elem_size=6, elem_count=1):
+      bytes 0-1  word 0  status bits  T: EN/TT/DN   C: CU/CD/DN/OV/UN
+                                      R: EN/EU/DN/EM/ER/UL/IN/FD
+      bytes 2-3  word 1  PRE (timer/counter preset)  | LEN (control length)
+      bytes 4-5  word 2  ACC (timer/counter accum)   | POS (control position)
 
     `base_off` is the byte offset of this element inside the handle's buffer. It
     is 0 for a one-element handle and the element's position when the value
@@ -1198,36 +1538,40 @@ def _slc_read_value(tag_handle: int, name: str, base_off: int = 0):
     PCCC request) — every offset below is relative to the element, so shifting
     the base is all that block support needs here.
 
-    Returns int, float, bool, or dict {CTL, PRE, ACC} for bare T/C element.
+    Returns int, float, bool, or a dict for a bare structure element:
+    {CTL, PRE, ACC} for T/C, {CTL, LEN, POS} for R (CONTROL).
     """
     parsed = _slc_parse_addr(name)
     if not parsed:
         return None
     prefix, file_num, element, bit, sub = parsed
 
-    if prefix in ('T', 'C'):
-        bits_map = _T_BITS if prefix == 'T' else _C_BITS
+    if prefix in ('T', 'C', 'R'):
+        bits_map = _STRUCT_BITS[prefix]
 
         if sub and sub in bits_map:
-            # Named status bit: EN, TT, DN, CU, CD, OV, UN
+            # Named status bit: EN, TT, DN, CU, CD, OV, UN (T/C)
+            #                   EN, EU, DN, EM, ER, UL, IN, FD (R)
             ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
             return bool((ctl_word >> bits_map[sub]) & 1)
 
         elif sub in _TC_BYTE_OFF:
-            # PRE or ACC — read from correct byte offset
+            # PRE/ACC (timer, counter) or LEN/POS (control) — byte offset per member
             return _libplctag.plc_tag_get_int16(tag_handle, base_off + _TC_BYTE_OFF[sub])
 
         elif sub is None and bit is not None:
-            # Numeric bit within control word: T4:0/13 (same as DN)
+            # Numeric bit within control word: T4:0/13 (same as DN), R6:0/12 (EM)
             ctl_word = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
             return bool((ctl_word >> bit) & 1)
 
         else:
-            # Bare T/C element → return structured dict
+            # Bare element → structured dict, named for the element type
             ctl = _libplctag.plc_tag_get_uint16(tag_handle, base_off)
-            pre = _libplctag.plc_tag_get_int16(tag_handle, base_off + 2)
-            acc = _libplctag.plc_tag_get_int16(tag_handle, base_off + 4)
-            return {'CTL': ctl, 'PRE': pre, 'ACC': acc}
+            w1 = _libplctag.plc_tag_get_int16(tag_handle, base_off + 2)
+            w2 = _libplctag.plc_tag_get_int16(tag_handle, base_off + 4)
+            if prefix == 'R':
+                return {'CTL': ctl, 'LEN': w1, 'POS': w2}
+            return {'CTL': ctl, 'PRE': w1, 'ACC': w2}
 
     elif prefix == 'F':
         return round(_libplctag.plc_tag_get_float32(tag_handle, base_off), 6)
@@ -1273,6 +1617,7 @@ class LibplctagConnection:
         self.controller_info = {}
         self.error = ""
         self._lock = asyncio.Lock()
+        self._closing = False                     # set for good by cancel_reads()
         self._handles: dict[str, int] = {}        # addr → tag handle
         self._handle_meta: dict[str, dict] = {}   # addr → meta from _build_tag_path
         self._type_hints: dict[str, str] = {}     # addr → L5X dataType (from tracer)
@@ -1287,6 +1632,35 @@ class LibplctagConnection:
         # altogether — the request count matters far too much to surrender it
         # over a size the SLC simply would not quote.
         self._slc_block_cap: dict = {}
+        # Refusal bookkeeping for those two: consecutive refused cycles per
+        # block key, when each file last changed size, how long it waits before
+        # trying a bigger size again, and the files reading at a size that was
+        # just given back (see _slc_shrink / _slc_regrow).
+        self._slc_refused: dict = {}
+        self._slc_shrunk_at: dict = {}
+        self._slc_regrow_wait: dict = {}
+        self._slc_probing: set = set()
+        self._refused_all_logged = False          # "refused every request" said once
+        self._slc_probe_next = False              # add _SLC_PROBE to the next read
+        # I/O image block reads (Config.io_block): the rack layout the tracer
+        # sends with its watch list — {slot: (input words, output words)} — and
+        # the checks that compare a block with word-by-word reads before it is
+        # trusted (see _io_plan / _io_settle). The layout arrives on the event
+        # loop while a read runs in the executor, hence the lock.
+        self._io_mu = threading.RLock()
+        self._io_slots = None
+        self._io_reset()
+        # When the request now in flight on each handle was sent. A reply that
+        # never comes used to keep its tag "in flight" for the life of the
+        # connection, and every cycle then waited the full deadline for it.
+        self._inflight: dict[str, float] = {}
+        self._lost_streak: dict[str, int] = {}   # consecutive lost replies per handle
+        self.lost_replies = 0                    # cancelled on this connection
+        # Measured pace of the link: seconds per request in the last cycle and
+        # a running average — what the batch deadline is sized from.
+        self._req_s_last = 0.0
+        self._req_s_avg = 0.0
+        self.last_req_ms = 0.0
         # Physical requests issued by the last read — the number the poll cycle
         # is actually made of, after bits, structures and SLC blocks collapse.
         self.last_phys_reads = 0
@@ -1423,11 +1797,60 @@ class LibplctagConnection:
                      f"dropped {n} handle(s) to rebuild with read_cache_ms={cache_ms}")
 
     # ── lifecycle ---------------------------------------------------------
-    async def connect(self) -> bool:
+    def cancel_reads(self):
+        """The session is being stopped: a read or a connect probe running on
+        the executor gives up at its next poll pass, and none starts again.
+
+        One way only — a stopped session never uses its connection again
+        (Reconnect builds a new one). Without it, stopping waited out the whole
+        batch deadline of a read on a slow line, up to 10 s, and closing the
+        window did not wait that long: the process went down with every
+        handle still open.
+        """
+        self._closing = True
+
+    async def _run_locked(self, fn, *args):
+        """Run fn on the executor under the connection lock, and keep the lock
+        until the thread has really finished.
+
+        Cancelling the task that awaits it cannot stop a thread already inside
+        libplctag. A plain `async with` released the lock right then, so stop()
+        destroyed the handles while the read was still polling them; the read
+        dropped failed handles out of the very dict the destroy was walking,
+        and whatever the destroy had not reached yet stayed open.
+        """
         async with self._lock:
-            return await asyncio.get_event_loop().run_in_executor(None, self._connect_sync)
+            fut = asyncio.get_event_loop().run_in_executor(None, fn, *args)
+            try:
+                return await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                await asyncio.wait({fut})    # quick after cancel_reads()
+                raise
+
+    async def connect(self) -> bool:
+        return await self._run_locked(self._connect_sync)
+
+    def _probe_wait(self, tag: int, rc: int):
+        """Wait for a non-blocking create or read of the probe tag to finish.
+
+        Returns its final status, PLCTAG_ERR_TIMEOUT after _LIBPLCTAG_TIMEOUT,
+        or None as soon as the session is being stopped. A blocking call could
+        not be cut short: closing the window while an unreachable controller
+        was being probed sat out up to two full timeouts.
+        """
+        deadline = time.monotonic() + _LIBPLCTAG_TIMEOUT / 1000.0
+        while rc == PLCTAG_STATUS_PENDING:
+            if self._closing:
+                return None
+            if time.monotonic() >= deadline:
+                return PLCTAG_ERR_TIMEOUT
+            time.sleep(0.01)
+            rc = _libplctag.plc_tag_status(tag)
+        return rc
 
     def _connect_sync(self) -> bool:
+        if self._closing:
+            return False
         try:
             self._destroy_all()
             if self.cfg.controller_type == 'logix':
@@ -1439,15 +1862,24 @@ class LibplctagConnection:
             if not probe_path:
                 self.error = "Cannot build probe tag path"
                 return False
-            tag = _libplctag.plc_tag_create(probe_path.encode('utf-8'), _LIBPLCTAG_TIMEOUT)
-            if tag < 0:
-                err = _libplctag.plc_tag_decode_error(tag)
-                self.error = f"libplctag create failed: {err.decode() if err else tag}"
+            # Non-blocking create and read, waited out in _probe_wait so that a
+            # session being stopped does not have to sit through the timeouts.
+            tag = _libplctag.plc_tag_create(probe_path.encode('utf-8'), 0)
+            rc = tag if tag < 0 else self._probe_wait(tag, _libplctag.plc_tag_status(tag))
+            if rc is not None and rc != PLCTAG_STATUS_OK:
+                if tag >= 0:
+                    _libplctag.plc_tag_destroy(tag)
+                err = _libplctag.plc_tag_decode_error(rc)
+                self.error = f"libplctag create failed: {err.decode() if err else rc}"
                 self.connected = False
                 self.log.error(f"libplctag connect error ({probe_label}): {self.error}")
                 return False
-            rc = _libplctag.plc_tag_read(tag, _LIBPLCTAG_TIMEOUT)
+            if rc is not None:
+                rc = self._probe_wait(tag, _libplctag.plc_tag_read(tag, 0))
             _libplctag.plc_tag_destroy(tag)
+            if rc is None:
+                self.connected = False           # stopped mid-probe, nothing to say
+                return False
             if rc != PLCTAG_STATUS_OK:
                 err = _libplctag.plc_tag_decode_error(rc)
                 self.error = f"libplctag probe read failed: {err.decode() if err else rc}"
@@ -1485,6 +1917,7 @@ class LibplctagConnection:
                 pass
         self._handles.clear()
         self._handle_meta.clear()
+        self._inflight.clear()
 
     async def disconnect(self):
         async with self._lock:
@@ -1495,9 +1928,7 @@ class LibplctagConnection:
     async def read_tags(self, tag_names: list) -> dict:
         if not self.connected:
             return {}
-        async with self._lock:
-            return await asyncio.get_event_loop().run_in_executor(
-                None, self._read_sync, tag_names)
+        return await self._run_locked(self._read_sync, tag_names)
 
     def _read_sync(self, tag_names: list) -> dict:
         """Non-blocking batch read: start all pending, poll until done, collect.
@@ -1523,6 +1954,8 @@ class LibplctagConnection:
         Structure bits (TIMER/COUNTER/CONTROL: .DN/.EN/T4:0/DN/T4:0/13/…) are
         never promoted — they fall through to a direct read, unchanged.
         """
+        if self._closing:
+            return {}                  # the session is stopping (cancel_reads)
         results: dict[str, dict] = {}
         is_logix = (self.cfg.controller_type == 'logix')
 
@@ -1560,17 +1993,32 @@ class LibplctagConnection:
         # One PCCC request per address is what makes a big SLC watch list slow;
         # contiguous runs of a data file collapse into a single request here.
         block_of: dict[str, tuple[str, int]] = {}   # phys_name -> (block_key, byte_off)
+        # I/O words read as a block AND one by one this cycle (see _io_plan)
+        io_check: dict[str, tuple[str, int]] = {}
+        io_slots = self._io_slots
         if (not is_logix) and getattr(self.cfg, 'slc_blocks', True):
+            if self._slc_block_cap or self._slc_no_block:
+                self._slc_regrow()
             block_of = _plan_slc_blocks(
                 phys_set, self._slc_no_block,
                 lambda k: self._slc_block_cap.get(k, _SLC_BLOCK_BYTES),
                 getattr(self.cfg, 'slc_gap_bytes', _SLC_GAP_BYTES))
-        if block_of:
+            # The I/O image as well, on a controller that has it switched on
+            if getattr(self.cfg, 'io_block', False):
+                io_blocks, io_check = self._io_plan(phys_set, io_slots)
+                block_of.update(io_blocks)
+        if block_of or io_check:
             covered = set(block_of)
             phys_names = sorted(phys_set - covered)
-            phys_names += sorted({k for k, _ in block_of.values()})
+            phys_names += sorted({k for k, _ in block_of.values()}
+                                 | {k for k, _ in io_check.values()})
         else:
             phys_names = list(phys_set)
+        # Last cycle the controller refused every block with nothing else to
+        # tell a size limit from a PLC that refuses everything — ask it one
+        # plain word too (see "Refusals" below).
+        if self._slc_probe_next and not is_logix and _SLC_PROBE not in phys_names:
+            phys_names.append(_SLC_PROBE)
 
         def _hit(phys_name):
             """Handle + byte offset holding this address, or None if not read."""
@@ -1628,42 +2076,59 @@ class LibplctagConnection:
         # ── Non-blocking batch read of the physical tag set ────────────────
         pending:  list[tuple[str, int]] = []   # read issued, waiting for data
         creating: list[tuple[str, int]] = []   # handle still being set up
+        lost_now: list[tuple[str, float]] = [] # (name, seconds waited) given up on
+        # Replies that came over the wire this cycle, and when the last one
+        # did — the measured pace of the link (see _note_req_time).
+        n_replies = 0
+        t_last_reply = _dbg_t0
 
         # A file whose block size was already stepped down this cycle. Several
         # blocks of one file fail together, and halving once per failure would
         # skip straight past the sizes the controller does accept.
         shrunk: set = set()
+        # Blocks the controller refused this cycle — weighed once the whole
+        # cycle is in (see "Refusals" below the poll loop).
+        refused_now: list[tuple[str, str]] = []
 
-        def _fail(name: str, msg: str, drop: bool):
+        def _fail(name: str, msg: str, drop: bool, rc=None):
             phys_err[name] = {"value": None, "type": "?", "error": msg,
                               "ts": time.time()}
             if drop:
                 self._drop_handle(name)
-                # A block read the controller refused (too many elements, file
-                # shorter than the run) must not keep failing every cycle: retire
-                # blocks for that data file and let its addresses be read one by
-                # one from the next cycle on. Timeouts do NOT land here — those
-                # are transient and keep the handle.
-                blk = _slc_parse_block_key(name)
-                if blk is not None:
-                    parsed = _slc_parse_addr(blk[0])
-                    if parsed:
-                        key = (parsed[0], parsed[1])
-                        if key in shrunk:
-                            return
-                        shrunk.add(key)
-                        cap = self._slc_block_cap.get(key, _SLC_BLOCK_BYTES) // 2
-                        if cap >= _SLC_BLOCK_BYTES_MIN:
-                            self._slc_block_cap[key] = cap
-                            self.log.warning(
-                                f"SLC block read refused on {parsed[0]}{parsed[1]} "
-                                f"({msg}) — retrying with {cap}-byte blocks")
-                        elif key not in self._slc_no_block:
-                            self._slc_no_block.add(key)
-                            self.log.warning(
-                                f"SLC block read failed on {parsed[0]}{parsed[1]} "
-                                f"({msg}) — falling back to one request per address "
-                                f"for this file")
+            # A block read the controller refused (too many elements, file
+            # shorter than the run) must not keep failing every cycle: its file
+            # steps down to smaller blocks, at the floor to one request per
+            # address. Only a refusal counts — the PLC answered and said no —
+            # and only once it repeats. A dropped connection, a cancelled
+            # request or one bad moment on a busy line used to cut the blocks
+            # for good, and the file then cost more requests until Reconnect.
+            # Timeouts never land here: they keep the handle and say nothing.
+            if rc in _REFUSAL_ERRS and _slc_block_file(name) is not None:
+                refused_now.append((name, msg))
+
+        def _count_refusal(name: str, msg: str):
+            key = _slc_block_file(name)
+            # A file already stepped down this cycle has new block keys from the
+            # next one on; a count kept under this key would outlive it.
+            if key is None or key in shrunk:
+                return
+            refused = self._slc_refused.get(name, 0) + 1
+            self._slc_refused[name] = refused
+            if key[0] in ('I', 'O'):
+                # An I/O image block has no smaller size worth trying: the
+                # controller either serves a multi-word I/O read or it does not.
+                if refused >= _SLC_REFUSALS_TO_SHRINK:
+                    self._io_disable(key, f"the controller refused the block read "
+                                          f"({msg}, {refused} cycles in a row)")
+                return
+            # a size just given back is settled by its first refusal
+            probing = key in self._slc_probing
+            if refused < _SLC_REFUSALS_TO_SHRINK and not probing:
+                return
+            shrunk.add(key)
+            blk = _slc_parse_block_key(name)
+            self._slc_shrink(key, msg, refused, probing,
+                             blk[1] * blk[2] if blk else _SLC_BLOCK_BYTES)
 
         def _decode(rc: int) -> str:
             err = _libplctag.plc_tag_decode_error(rc)
@@ -1673,13 +2138,20 @@ class LibplctagConnection:
             """Sort a plc_tag_read() return code into ok / pending / error."""
             if rc == PLCTAG_STATUS_OK:
                 phys_ok[name] = handle
-            elif rc == PLCTAG_STATUS_PENDING or rc in _SOFT_READ_ERRS:
+                self._inflight.pop(name, None)
+            elif rc == PLCTAG_STATUS_PENDING:
+                # A fresh request went out — its clock starts now.
+                self._inflight[name] = time.monotonic()
+                pending.append((name, handle))
+            elif rc in _SOFT_READ_ERRS:
                 # BUSY: a read started in an earlier cycle has not landed yet.
                 # Its result goes into this same tag buffer, so there is nothing
-                # to re-issue — just keep waiting on the handle we already have.
+                # to re-issue — just keep waiting on the handle we already have,
+                # on the clock of the request that is actually out.
+                self._inflight.setdefault(name, time.monotonic())
                 pending.append((name, handle))
             else:
-                _fail(name, _decode(rc), drop=True)
+                _fail(name, _decode(rc), drop=True, rc=rc)
 
         # Kick off creation AND reads for the whole set, all non-blocking.
         # Handle creation is async too (plc_tag_create with timeout=0): a batch
@@ -1702,13 +2174,18 @@ class LibplctagConnection:
 
         # Poll until every read completes or the batch deadline elapses. The
         # deadline covers setup + read — a first-seen tag needs both — and
-        # scales with the size of the batch: a controller reached over a serial
-        # gateway answers ~20 requests per second, so a flat 3 s would cut a
-        # perfectly healthy cycle short and report timeouts for the tail.
-        budget = max(_LIBPLCTAG_TIMEOUT / 1000.0,
-                     min(_READ_BUDGET_MAX, _READ_BUDGET_PER_REQ * len(phys_names)))
+        # follows the measured pace of the link (see _read_budget).
+        budget = self._read_budget(len(phys_names))
+        # A request still unanswered after several whole deadlines is not slow,
+        # it is lost: no later cycle would ever see its reply.
+        lost_after = max(_LOST_REPLY_MIN_S, _LOST_REPLY_DEADLINES * budget)
         deadline = time.monotonic() + budget
         while (pending or creating) and time.monotonic() < deadline:
+            if self._closing:
+                # Stopping: nobody is left to receive this cycle. What is still
+                # in flight goes with its handle in the disconnect that follows.
+                return {}
+            now = time.monotonic()
             # 1) handles still being set up → issue their read once ready
             if creating:
                 still_c: list[tuple[str, int]] = []
@@ -1728,7 +2205,7 @@ class LibplctagConnection:
                     else:
                         # Setup itself failed (unknown tag name, bad path) — the
                         # handle is useless, drop it so it can be rebuilt later.
-                        _fail(name, _decode(st), drop=True)
+                        _fail(name, _decode(st), drop=True, rc=st)
                 creating = still_c
             # 2) reads in flight
             if pending:
@@ -1741,10 +2218,22 @@ class LibplctagConnection:
                         continue
                     if st == PLCTAG_STATUS_OK:
                         phys_ok[name] = handle
+                        self._inflight.pop(name, None)
+                        n_replies += 1
+                        t_last_reply = now
                     elif st == PLCTAG_STATUS_PENDING:
-                        still.append((name, handle))
+                        sent = self._inflight.get(name)
+                        if sent is not None and now - sent > lost_after:
+                            # Cancelled now rather than at the deadline: waiting
+                            # for it is what kept every cycle at full length.
+                            self._cancel_request(name, handle)
+                            lost_now.append((name, now - sent))
+                            _fail(name, _LOST_REPLY, drop=False)
+                        else:
+                            still.append((name, handle))
                     else:
-                        _fail(name, _decode(st), drop=st not in _SOFT_READ_ERRS)
+                        self._inflight.pop(name, None)
+                        _fail(name, _decode(st), drop=st not in _SOFT_READ_ERRS, rc=st)
                 pending = still
             if pending or creating:
                 # Every pass costs one library call — and one tag mutex — per
@@ -1759,10 +2248,57 @@ class LibplctagConnection:
         # KEEP the handle. The read is in flight and normally lands a few ms
         # later, so the next cycle collects it with no re-creation at all — that
         # is what stops one slow cycle from cascading into a rebuild storm.
+        # The request keeps its clock (_inflight): if it never lands, the
+        # lost-reply check above gives up on it a few deadlines later.
+        timed_out = bool(pending or creating)
         for name, _h in pending:
             _fail(name, "read timeout", drop=False)
         for name, _h in creating:
             _fail(name, "tag setup timeout", drop=False)
+
+        # ── Refusals ────────────────────────────────────────────────────────
+        # A refused block counts against its size only while the controller
+        # answers other requests of the cycle. One that refuses EVERYTHING — the
+        # PLC behind a live gateway gone, a program download under way — made
+        # every block "refused" at once: three such cycles cut every file down
+        # to single requests and switched the I/O blocks off, and once the PLC
+        # was back the Silo trace needed 224 requests instead of 21, ran into
+        # the deadline and kept most of its tags in error for the twenty
+        # minutes the sizes took to grow back. When the refusals of a cycle
+        # have nothing to compare with — a watch list that is all blocks — the
+        # next cycle adds one single-word read (_SLC_PROBE): the controller
+        # answering that one is what makes the refusals count.
+        if refused_now:
+            if phys_ok:
+                for name, msg in refused_now:
+                    _count_refusal(name, msg)
+            elif not self._refused_all_logged:
+                self._refused_all_logged = True
+                self.log.warning(
+                    f"none of the {len(phys_names)} request(s) of this cycle got a normal "
+                    f"answer ({len(refused_now)} block(s) refused: {refused_now[0][1]}) — block "
+                    f"sizes stay as they are until the controller answers again (PLC "
+                    f"behind the gateway unreachable, or a program download under way?)")
+        if phys_ok:
+            self._refused_all_logged = False
+        self._slc_probe_next = bool(refused_now) and not any(n != _SLC_PROBE for n in phys_ok)
+
+        # ── How fast the link answers ───────────────────────────────────────
+        # Time to the last reply over the replies that came: what one request
+        # costs on this link right now. It stays true when the deadline cut the
+        # cycle short — 23 replies in 3.36 s are 146 ms each — which is exactly
+        # when the length of the cycle stops saying anything.
+        if n_replies:
+            self._note_req_time((t_last_reply - _dbg_t0) / n_replies)
+        elif timed_out:
+            # Not one reply inside the whole budget: a request takes at least
+            # that long. Shown as such, but not taught to the deadline — a lost
+            # reply must not stretch every cycle that follows.
+            self.last_req_ms = budget * 1000.0
+        if lost_now:
+            self._log_lost(lost_now)
+        if io_check:
+            self._io_settle(io_check, phys_ok, io_slots)
 
         # ── Assemble results under the ORIGINAL requested keys ─────────────
         for name in direct:
@@ -1799,10 +2335,9 @@ class LibplctagConnection:
             fresh = []
             for n, e in phys_err.items():
                 msg = str(e.get('error'))
-                if self._err_seen.get(n) != msg:
-                    label = (n.replace(_LGX_STRUCT_SENTINEL, '(struct)')
-                              .replace(_SLC_BLOCK_SENTINEL, ' ×'))   # N7:0 ×28
-                    fresh.append(f"{label} → {msg}")
+                # a lost reply has its own line (_log_lost)
+                if self._err_seen.get(n) != msg and msg != _LOST_REPLY:
+                    fresh.append(f"{_phys_label(n)} → {msg}")   # N7:0 ×28
                 self._err_seen[n] = msg
             if fresh:
                 more = f" (+{len(fresh) - 8} more)" if len(fresh) > 8 else ""
@@ -1810,6 +2345,10 @@ class LibplctagConnection:
                             f"{'; '.join(fresh[:8])}{more}")
         for n in phys_ok:
             self._err_seen.pop(n, None)
+            self._lost_streak.pop(n, None)
+            self._slc_refused.pop(n, None)
+        if self._slc_probing:
+            self._slc_settle_probes(phys_ok)
 
         if DEBUG_SAVE:
             # Post-read summary: timing + handle-cache reuse for this batch.
@@ -1825,6 +2364,378 @@ class LibplctagConnection:
                 f"ok={len(phys_ok)} err={len(phys_err)}")
 
         return results
+
+    # ── pace of the link ---------------------------------------------------
+    def _read_budget(self, n_req: int) -> float:
+        """Batch read deadline: twice what the link needs at its measured pace.
+
+        A fixed 120 ms per request cut every cycle short the moment the link got
+        slower than that — another master on the gateway was enough — and the
+        tail of the queue was reported as timeouts while its replies were on the
+        way. Sized from the measured pace, a slow link makes a longer cycle
+        instead: every value arrives, only less often. The last cycle makes it
+        react to a slowdown at once, the running average lets it relax
+        gradually. Until the first measurement the old per-request guess holds.
+        """
+        s = max(self._req_s_last, self._req_s_avg)
+        per_req = _READ_BUDGET_MARGIN * s if s > 0 else _READ_BUDGET_PER_REQ
+        return max(_LIBPLCTAG_TIMEOUT / 1000.0,
+                   min(_READ_BUDGET_MAX, per_req * n_req))
+
+    def _note_req_time(self, s: float):
+        """Record one cycle's seconds per request (see _read_budget)."""
+        self._req_s_last = s
+        self._req_s_avg = (s if self._req_s_avg <= 0
+                           else self._req_s_avg + _REQ_AVG_ALPHA * (s - self._req_s_avg))
+        self.last_req_ms = s * 1000.0
+
+    # ── lost replies -------------------------------------------------------
+    def _cancel_request(self, name: str, handle: int):
+        """Give up on a request whose reply is not coming.
+
+        plc_tag_abort keeps the handle, so the next cycle simply asks again. A
+        second loss in a row on the same tag — or a DLL without abort — rebuilds
+        the handle instead: whatever wedged it does not survive a fresh tag.
+        """
+        self._inflight.pop(name, None)
+        again = self._lost_streak.get(name, 0)
+        self._lost_streak[name] = again + 1
+        if not again and _LIBPLCTAG_HAS_ABORT:
+            try:
+                if _libplctag.plc_tag_abort(handle) == PLCTAG_STATUS_OK:
+                    return
+            except Exception:
+                pass
+        self._drop_handle(name)
+
+    def _log_lost(self, lost: list):
+        self.lost_replies += len(lost)
+        shown = "; ".join(f"{_phys_label(n)} after {age:.0f} s" for n, age in lost[:8])
+        more = f" (+{len(lost) - 8} more)" if len(lost) > 8 else ""
+        self.log.warning(
+            f"reply lost for {len(lost)} request(s): {shown}{more} — cancelled, "
+            f"asked again next cycle ({self.lost_replies} lost on this connection; "
+            f"a count that keeps growing points at the link itself)")
+
+    # ── SLC block size ------------------------------------------------------
+    def _slc_size_text(self, key) -> str:
+        if key in self._slc_no_block:
+            return "one request per address"
+        return f"{self._slc_block_cap.get(key, _SLC_BLOCK_BYTES)}-byte blocks"
+
+    def _slc_drop_refusals(self, key):
+        """Forget the refusal counts of one file — its block keys just changed."""
+        for k in [k for k in self._slc_refused if _slc_block_file(k) == key]:
+            del self._slc_refused[k]
+
+    def _slc_shrink(self, key, msg: str, refused: int, probing: bool,
+                    blk_bytes: int = _SLC_BLOCK_BYTES):
+        """One step down for a file whose blocks the controller keeps refusing.
+
+        The step is half of the refused block, not half of the file's limit: a
+        short run that crosses the end of the data file (an address the PLC
+        does not have) fits under every smaller limit, so halving the limit
+        took five rounds of refusals — all the while failing the valid
+        addresses inside that run — before reaching one request per address.
+        """
+        name = f"{key[0]}{key[1]}"
+        tried = self._slc_size_text(key)
+        cap = min(self._slc_block_cap.get(key, _SLC_BLOCK_BYTES), blk_bytes) // 2
+        if cap >= _SLC_BLOCK_BYTES_MIN:
+            self._slc_block_cap[key] = cap
+        else:
+            self._slc_no_block.add(key)
+        self._slc_shrunk_at[key] = time.monotonic()
+        self._slc_drop_refusals(key)
+        if probing:
+            # The size just given back is refused again: back down at once, and
+            # wait twice as long before the next try.
+            self._slc_probing.discard(key)
+            wait = min(_SLC_REGROW_MAX_S, 2 * self._slc_regrow_wait.get(key, _SLC_REGROW_S))
+            self._slc_regrow_wait[key] = wait
+            self.log.warning(f"SLC {name} still refuses {tried} ({msg}) — back to "
+                             f"{self._slc_size_text(key)}, next try in {wait / 60:.0f} min")
+        elif cap >= _SLC_BLOCK_BYTES_MIN:
+            self.log.warning(f"SLC block read refused on {name} ({msg}, {refused} "
+                             f"cycles in a row) — retrying with {cap}-byte blocks")
+        else:
+            self.log.warning(f"SLC block read failed on {name} ({msg}, {refused} "
+                             f"cycles in a row) — falling back to one request per "
+                             f"address for this file")
+
+    def _slc_regrow(self):
+        """Give a cut-down file its previous block size back after a quiet spell.
+
+        A refusal on a busy line can be a passing thing, while a size lost for
+        good is paid for in requests every cycle until Reconnect. So every
+        _SLC_REGROW_S the file tries one size up; the first refusal of that try
+        sends it straight back and doubles the wait — a controller that really
+        will not serve big blocks costs one refused read now and then.
+        """
+        now = time.monotonic()
+        for key in set(self._slc_block_cap) | self._slc_no_block:
+            if key in self._slc_probing:
+                continue
+            wait = self._slc_regrow_wait.get(key, _SLC_REGROW_S)
+            if now - self._slc_shrunk_at.setdefault(key, now) < wait:
+                continue
+            if key in self._slc_no_block:
+                self._slc_no_block.discard(key)
+            else:
+                cap = self._slc_block_cap[key] * 2
+                if cap >= _SLC_BLOCK_BYTES:
+                    del self._slc_block_cap[key]
+                else:
+                    self._slc_block_cap[key] = cap
+            self._slc_shrunk_at[key] = now
+            self._slc_probing.add(key)
+            self._slc_drop_refusals(key)
+            self.log.info(f"SLC {key[0]}{key[1]}: no refusals for {wait / 60:.0f} min "
+                          f"— trying {self._slc_size_text(key)} again")
+
+    def _slc_settle_probes(self, phys_ok: dict):
+        """A size given back by _slc_regrow stays after one clean block read."""
+        read_ok = {_slc_block_file(n) for n in phys_ok}
+        for key in list(self._slc_probing):
+            if key not in read_ok:
+                continue                      # not read this cycle — still open
+            self._slc_probing.discard(key)
+            self._slc_regrow_wait.pop(key, None)   # next step waits the normal time
+            if key not in self._slc_block_cap and key not in self._slc_no_block:
+                self._slc_shrunk_at.pop(key, None)  # full size again
+            self.log.info(f"SLC {key[0]}{key[1]}: {self._slc_size_text(key)} accepted")
+
+    # ── SLC I/O image in block reads -------------------------------------
+    def _io_reset(self):
+        """Forget every I/O block check — new layout, mode switched, new link."""
+        self._io_off: dict = {}         # (prefix, file) → why blocks are off
+        self._io_ok: dict = {}          # (prefix, file) → words a check confirmed
+        self._io_checked_at: dict = {}  # (prefix, file) → monotonic time of it
+        self._io_tries: dict = {}       # (prefix, file) → checks without a pass
+        self._io_miss: dict = {}        # word → checks in a row it disagreed
+        # Bits seen changing on their own between two check cycles, per I/O
+        # word, and the last value each read gave — see _io_settle for why a
+        # check must not count them. Both live for one run of checks of a file.
+        self._io_active: dict = {}      # word → bit mask
+        self._io_last: dict = {}        # (word, 'b' | 's') → (value, monotonic time)
+        self._io_seq: set = set()       # files in a run of check cycles
+        self._io_hint_logged = False
+
+    def _io_layout_text(self) -> str:
+        s = self._io_slots
+        if not s:
+            return ("I/O block read on — no slot layout yet: I/O is read word by "
+                    "word until the tracer sends one with its watch list")
+        return (f"I/O block read on — layout of {len(s)} slot(s): "
+                f"{sum(v[0] for v in s.values())} input / "
+                f"{sum(v[1] for v in s.values())} output word(s)")
+
+    def set_io_slots(self, slots):
+        """Rack layout the tracer read from its .SLC project.
+
+        `slots` = {slot: [input_words, output_words]} (SCAN_IN / SCAN_OUT of the
+        export); None or {} = no layout, I/O is read word by word. It comes with
+        every watch_only, so a project loaded in the tracer brings its own — and
+        a layout other than the one in use starts the checks over.
+        """
+        norm = {}
+        if isinstance(slots, dict):
+            for k, v in slots.items():
+                try:
+                    s, i, o = int(k), int(v[0]), int(v[1])
+                except (TypeError, ValueError, IndexError, KeyError):
+                    continue
+                if 0 <= s <= 255 and 0 <= i <= 255 and 0 <= o <= 255:
+                    norm[s] = (i, o)
+        norm = norm or None
+        with self._io_mu:
+            if norm == self._io_slots:
+                return
+            self._io_slots = norm
+            self._io_reset()
+        if getattr(self.cfg, 'io_block', False):
+            self.log.info(self._io_layout_text())
+
+    async def update_io_block(self, on: bool):
+        async with self._lock:
+            await asyncio.get_event_loop().run_in_executor(
+                None, self._update_io_block_sync, on)
+
+    def _update_io_block_sync(self, on: bool):
+        """Switch I/O block reads on or off on the live connection."""
+        on = bool(on)
+        if on == bool(getattr(self.cfg, 'io_block', False)):
+            return
+        self.cfg.io_block = on
+        with self._io_mu:
+            self._io_reset()
+        if on:
+            self.log.info(self._io_layout_text())
+            return
+        blocks = [n for n in self._handles
+                  if (_slc_block_file(n) or ('',))[0] in ('I', 'O')]
+        for n in blocks:
+            self._drop_handle(n)
+        self.log.info("I/O block read off — I/O is read word by word"
+                      + (f" ({len(blocks)} block handle(s) closed)" if blocks else ""))
+
+    def _io_disable(self, key, why: str):
+        """Stop reading one I/O file as a block on this connection."""
+        with self._io_mu:
+            if key in self._io_off:
+                return
+            self._io_off[key] = why
+            self._io_ok.pop(key, None)
+            self._io_tries.pop(key, None)
+            self._io_seq.discard(key)
+            for w in [w for w in self._io_miss if (_slc_io_word(w) or ())[:2] == key]:
+                del self._io_miss[w]
+        self._slc_drop_refusals(key)
+        self.log.warning(f"I/O block read off for {key[0]}{key[1]}: {why} — its words "
+                         f"are read one by one (Reconnect, or switching the mode off "
+                         f"and on again, tries the block once more)")
+
+    def _io_plan(self, phys_set, io_slots):
+        """This cycle's I/O blocks, and the words to read both ways.
+
+        Returns (blocks, check). `blocks` joins block_of. `check` holds the words
+        whose block is not confirmed yet: they are ALSO read on their own this
+        cycle, their values come from those single reads, and _io_settle then
+        compares the two. Until a block has matched, it never feeds a value.
+        """
+        if not io_slots:
+            if not self._io_hint_logged and any(_slc_io_word(n) for n in phys_set):
+                self._io_hint_logged = True
+                self.log.info("I/O block read is on, but no slot layout came with the "
+                              "watch list (older tracer, or a project without the .SLC "
+                              "I/O configuration) — reading I/O word by word")
+            return {}, {}
+        with self._io_mu:
+            plan = _plan_slc_io_blocks(phys_set, io_slots, set(self._io_off))
+            words_of = {}
+            for w, (bkey, _off) in plan.items():
+                words_of.setdefault(_slc_block_file(bkey), set()).add(w)
+            now = time.monotonic()
+            blocks, check = {}, {}
+            for key, words in words_of.items():
+                due = (not words <= self._io_ok.get(key, set())
+                       or now - self._io_checked_at.get(key, 0.0) >= _IO_RECHECK_S)
+                if due and key not in self._io_seq:
+                    # A new run of checks learns its moving bits afresh: what
+                    # moved a minute ago — a machine starting up, say — says
+                    # nothing about the two reads about to be compared.
+                    self._io_seq.add(key)
+                    for w in words:
+                        self._io_active.pop(w, None)
+                        self._io_last.pop((w, 'b'), None)
+                        self._io_last.pop((w, 's'), None)
+                target = check if due else blocks
+                for w in words:
+                    target[w] = plan[w]
+        return blocks, check
+
+    def _io_note(self, word: str, src: str, value: int) -> int:
+        """Remember one read of an I/O word ('b' block, 's' its own read) and
+        return the bits it was seen changing on since the previous check cycle
+        (call under _io_mu). Only reads close together count — after a pause
+        the old value says nothing about what moves now."""
+        now = time.monotonic()
+        prev = self._io_last.get((word, src))
+        self._io_last[(word, src)] = (value, now)
+        moving = self._io_active.get(word, 0)
+        if prev is not None and prev[0] != value and now - prev[1] <= _IO_MOVE_WINDOW_S:
+            moving |= prev[0] ^ value
+            self._io_active[word] = moving
+        return moving
+
+    def _io_settle(self, check, phys_ok, io_slots):
+        """Compare this cycle's I/O blocks with the same words read one by one.
+
+        The layout comes from the project file loaded in the tracer. A stale
+        .SLC shifts every word after the first card it gets wrong — silently,
+        the values would just belong to another card. So a block is trusted only
+        once all its words agree with their own reads in one cycle, and a word
+        disagreeing _IO_CHECK_MISMATCHES checks in a row turns block reads off
+        for its file (one disagreement can be an input that changed between the
+        two reads). A confirmed block is compared again every _IO_RECHECK_S and
+        whenever new words join it.
+
+        The two reads of a word are a whole cycle apart at worst — on a serial
+        line about a second — and a running plant changes inputs that fast: a
+        speed switch, a flasher, an analog card. Compared as whole words, such a
+        word disagreed check after check and a correct layout was switched off
+        as "not matching this controller". So a bit counts against the layout
+        only while BOTH reads have held it since the previous check cycle: one
+        that changed in between, in either read, was simply moving. A layout
+        that is off by a card keeps showing — the word read in the block belongs
+        to another card, and the two disagree on bits that hold still.
+
+        A check counts as failed only on evidence against the block: a word that
+        disagrees, or one the controller answered on its own while the block
+        stayed unanswered. A cycle in which none of the file's words came back
+        says nothing about the block — the link or the PLC is down — and every
+        such cycle used to count: an outage still going on _IO_CHECK_MAX_TRIES
+        cycles after a re-check fell due (about a minute and a half in all)
+        switched the file to word-by-word reads until the next Reconnect.
+        """
+        with self._io_mu:
+            if io_slots is not self._io_slots:
+                return                    # a new layout arrived while this ran
+            now = time.monotonic()
+            files = {}
+            for w, (bkey, off) in check.items():
+                files.setdefault(_slc_block_file(bkey), []).append((w, bkey, off))
+            for key, items in files.items():
+                if key in self._io_off:
+                    continue              # the controller refused it this cycle
+                agreed, worst, against = 0, None, False
+                for w, bkey, off in items:
+                    hb, hs = phys_ok.get(bkey), phys_ok.get(w)
+                    if hs is None:
+                        continue          # the word's own read failed — no verdict
+                    if hb is None:
+                        against = True    # the controller answered the word, not the block
+                        continue
+                    try:
+                        vb = _libplctag.plc_tag_get_uint16(hb, off)
+                        vs = _libplctag.plc_tag_get_uint16(hs, 0)
+                    except Exception:
+                        continue
+                    self._io_note(w, 'b', vb)
+                    moving = self._io_note(w, 's', vs)
+                    if not (vb ^ vs) & ~moving & 0xFFFF:
+                        agreed += 1
+                        self._io_miss.pop(w, None)
+                        continue
+                    against = True
+                    n = self._io_miss.get(w, 0) + 1
+                    self._io_miss[w] = n
+                    if worst is None or n > worst[3]:
+                        worst = (w, vb, vs, n)
+                if agreed == len(items):
+                    if key not in self._io_ok:
+                        n_req = len({b for _w, b, _o in items})
+                        self.log.info(f"I/O block read {key[0]}{key[1]}: {len(items)} "
+                                      f"word(s) in {n_req} request(s) — matches "
+                                      f"word-by-word reads")
+                    self._io_ok[key] = {w for w, _b, _o in items}
+                    self._io_checked_at[key] = now
+                    self._io_tries.pop(key, None)
+                    self._io_seq.discard(key)     # this run of checks is over
+                    continue
+                if not against:
+                    continue              # nothing came back to judge the block by
+                tries = self._io_tries.get(key, 0) + 1
+                self._io_tries[key] = tries
+                if worst and worst[3] >= _IO_CHECK_MISMATCHES:
+                    self._io_disable(key, (
+                        f"{worst[0]} reads {worst[1]:#06x} inside the block but "
+                        f"{worst[2]:#06x} on its own, {worst[3]} checks in a row — "
+                        f"the slot layout of the project loaded in the tracer does "
+                        f"not match this controller"))
+                elif tries >= _IO_CHECK_MAX_TRIES:
+                    self._io_disable(key, f"the block could not be confirmed in "
+                                          f"{tries} cycles")
 
     @staticmethod
     def _promote_bit(name: str, is_logix: bool):
@@ -2038,6 +2949,7 @@ class LibplctagConnection:
     def _drop_handle(self, name: str):
         h = self._handles.pop(name, None)
         self._handle_meta.pop(name, None)
+        self._inflight.pop(name, None)      # destroying a tag cancels its request
         if h is not None:
             try:
                 _libplctag.plc_tag_destroy(h)
@@ -2095,8 +3007,11 @@ def create_connection(cfg: Config, logger: logging.Logger | None = None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# What a request whose reply never came reports once it is cancelled.
+_LOST_REPLY = "reply lost"
+
 # Read results that mean "this cycle ran out of time", not "this tag is bad".
-_TIMEOUT_ERRS = ("read timeout", "tag setup timeout")
+_TIMEOUT_ERRS = ("read timeout", "tag setup timeout", _LOST_REPLY)
 
 # When to complain about the cycle length. Not "longer than the poll interval":
 # a controller reached over a serial gateway cannot serve a large watch list in
@@ -2104,12 +3019,27 @@ _TIMEOUT_ERRS = ("read timeout", "tag setup timeout")
 # bury the log. This is the level where something is actually wrong.
 _CYCLE_WARN_MS = 3000.0
 
-# Batch read deadline: at least _LIBPLCTAG_TIMEOUT, then this much per physical
-# request, capped. Sized for the slowest link the bridge is used on — a PLC
-# serial port behind a COM-to-Ethernet converter, where one request costs tens
-# of milliseconds — so that a long-but-healthy cycle is never cut short.
-_READ_BUDGET_PER_REQ = 0.12   # seconds per request
+# Batch read deadline: at least _LIBPLCTAG_TIMEOUT, at most _READ_BUDGET_MAX,
+# in between _READ_BUDGET_MARGIN times the measured time per request (see
+# LibplctagConnection._read_budget). Before the first measurement it assumes
+# _READ_BUDGET_PER_REQ — sized for the slowest link the bridge is used on, a PLC
+# serial port behind a COM-to-Ethernet converter.
+_READ_BUDGET_PER_REQ = 0.12   # seconds per request, until measured
+_READ_BUDGET_MARGIN = 2.0
 _READ_BUDGET_MAX = 10.0
+_REQ_AVG_ALPHA = 0.3          # weight of the newest cycle in the running average
+
+# A request unanswered for this many deadlines, and at least this long, is
+# taken for lost and cancelled.
+_LOST_REPLY_DEADLINES = 3
+_LOST_REPLY_MIN_S = 10.0
+
+# Nobody to show the values to → nothing to read them for. A tab that closes
+# leaves its watch list behind, and a forgotten bridge used to go on polling it
+# for good, sharing a slow serial line with the bridge that IS being watched.
+_IDLE_PAUSE_S = 10.0      # no client this long → pause (outlasts a page reload)
+_HTTP_CLIENT_S = 30.0     # an HTTP reader counts as a client this long after a call
+_RESUME_SETTLE_S = 0.5    # a returning tab sends its watch list before the first read
 
 
 class TagPoller:
@@ -2134,15 +3064,83 @@ class TagPoller:
         self.last_tag_count  = 0       # watch-list size read last cycle
         self._cycle_hist     = collections.deque(maxlen=10)
         self._overrun_logged = 0.0     # monotonic ts of the last overrun warning
+        # Why the poll loop stopped; "" while it is healthy. status() surfaces
+        # it so a dead poller cannot keep passing for a live link.
+        self.crashed         = ""
+        # Polling stops while nobody is attached (see _IDLE_PAUSE_S): a tab on
+        # the WebSocket, or an HTTP reader of /values or /watch lately.
+        self.paused          = False
+        self._client_seen    = time.monotonic()
+        self._http_seen      = float("-inf")
 
     def subscribe(self, ws): self.subscribers.add(ws)
     def unsubscribe(self, ws): self.subscribers.discard(ws)
     def watch(self, tags): self.watched.update(tags)
     def unwatch(self, tags): self.watched -= set(tags)
 
+    def touch_http(self):
+        """An HTTP reader asked for values — it counts as a client for a while."""
+        self._http_seen = time.monotonic()
+
+    def _has_client(self, now: float) -> bool:
+        return bool(self.subscribers) or now - self._http_seen < _HTTP_CLIENT_S
+
     async def run(self):
+        """Guarded entry point for the poll loop.
+
+        The task this runs in is created and never awaited, so an exception
+        escaping the loop used to end it in silence: `connected` stayed True,
+        the GUI and /sessions kept printing CONNECTED, the browser tab kept its
+        socket open, and the only symptom was values that never changed again.
+        Anything that escapes is now logged with its traceback, marks the
+        session down and is pushed to every client, so a stopped poll loop
+        reads as a dead link everywhere instead of as fresh data that happens
+        to be frozen.
+        """
         self._running = True
+        self.crashed  = ""
         self.log.info("Poller started")
+        try:
+            await self._poll_loop()
+        except asyncio.CancelledError:
+            raise                      # ordinary shutdown via session.stop()
+        except BaseException as e:
+            # Reported, not re-raised: the task object is never awaited, so a
+            # re-raise would only reach the interpreter at garbage-collection
+            # time, long after the operator needed to know.
+            await self._on_crash(e)
+        finally:
+            self._running = False
+
+    async def _on_crash(self, exc):
+        """Say it in the log, mark the session down, tell every client."""
+        self.crashed = f"{type(exc).__name__}: {exc}"
+        self.log.error(f"poller stopped: {self.crashed} — no further reads "
+                       f"until this session is restarted", exc_info=exc)
+        try:
+            self.conn.connected = False
+            self.conn.error = f"poller stopped ({self.crashed})"
+        except Exception:
+            pass
+        # A tab is still holding an open socket onto values that will never
+        # change again. Push the loss of the link so it shows DISCONNECTED
+        # instead of stale readings. Iterate a copy of the subscriber set:
+        # this path exists to report a failure and must not repeat one.
+        try:
+            payload = json.dumps({
+                "type": "status", "connected": False,
+                "error": getattr(self.conn, "error", "poller stopped"),
+                "controller": getattr(self.conn, "controller_info", {}),
+            })
+        except Exception:
+            return
+        for ws in list(self.subscribers):
+            try:
+                await ws.send(payload)
+            except Exception:
+                pass
+
+    async def _poll_loop(self):
         while self._running:
             if not self.conn.connected:
                 if not self.conn.auto_reconnect:
@@ -2151,6 +3149,29 @@ class TagPoller:
                 self.log.info(f"Reconnecting in {RECONNECT}s…")
                 await asyncio.sleep(RECONNECT)
                 await self.conn.connect()
+                continue
+            # Nobody attached for a while → stop reading, keep the watch list.
+            # The first client back resumes at once — after a short pause that
+            # lets a returning tab replace the list before anything is read.
+            now = time.monotonic()
+            if self._has_client(now):
+                self._client_seen = now
+                if self.paused:
+                    self.paused = False
+                    self.log.info(f"client connected — polling resumed "
+                                  f"({len(self.watched)} tag(s))")
+                    await asyncio.sleep(_RESUME_SETTLE_S)
+                    continue
+            elif self.watched and now - self._client_seen >= _IDLE_PAUSE_S:
+                if not self.paused:
+                    self.paused = True
+                    # what is cached would be stale by the time anyone looks
+                    self.values.clear()
+                    self.last_cycle_ms = 0.0
+                    self.last_timeouts = 0
+                    self.log.info(f"no clients for {_IDLE_PAUSE_S:.0f} s — polling "
+                                  f"paused ({len(self.watched)} tag(s) kept)")
+                await asyncio.sleep(0.25)
                 continue
             # Drop cached values for tags that are no longer watched,
             # so the bridge UI and reconnecting WS clients don't see stale entries.
@@ -2196,9 +3217,11 @@ class TagPoller:
             if now - self._overrun_logged >= 30.0:
                 self._overrun_logged = now
                 reads = getattr(self.conn, 'last_phys_reads', 0)
+                per_req = getattr(self.conn, 'last_req_ms', 0.0)
                 self.log.warning(
                     f"poll cycle {self.last_cycle_ms:.0f} ms for {n_tags} tag(s) "
                     f"in {reads} request(s)"
+                    + (f", {per_req:.0f} ms per request" if per_req else "")
                     + (f", {self.last_timeouts} timed out" if self.last_timeouts else "")
                     + " — check the link, the watch list or the block settings")
 
@@ -2243,6 +3266,9 @@ class PlcSession:
         self.conn    = None
         self.poller  = None
         self.running = False
+        # Set by SessionManager.start() — lets a WS client ask one session for
+        # the list of every controller this bridge process serves.
+        self.manager = None
         self.started_at = 0.0
         self._ws_srv = None
         self._ptask  = None
@@ -2267,6 +3293,8 @@ class PlcSession:
         self.running    = True
         self.started_at = time.time()
         await self.conn.connect()
+        if not self.running:
+            return False        # stopped while connecting — no poller to start
         if self.cfg.slc_path:
             try:
                 tags = load_tags_from_slc(self.cfg.slc_path)
@@ -2275,10 +3303,39 @@ class PlcSession:
             except Exception as e:
                 self.log.warning(f"SLC file load failed: {e}")
         self._ptask = asyncio.create_task(self.poller.run())
+        self._ptask.add_done_callback(self._on_poller_done)
         return True
+
+    def _on_poller_done(self, task):
+        """Catch a poll task that ended while the session was still up.
+
+        TagPoller.run() reports its own crashes; this covers what it cannot —
+        its handler failing, or the loop returning cleanly — so the task can
+        never disappear without a word.
+        """
+        if task.cancelled() or not self.running:
+            return                      # stop() / reconnect — expected
+        exc = task.exception()
+        if exc is not None:
+            self.log.error(f"poll task ended unexpectedly: "
+                           f"{type(exc).__name__}: {exc}", exc_info=exc)
+        elif not (self.poller and self.poller.crashed):
+            self.log.error("poll task ended unexpectedly with no error — "
+                           "polling has stopped, restart the session")
+        if self.poller and not self.poller.crashed:
+            self.poller.crashed = (f"{type(exc).__name__}: {exc}" if exc
+                                   else "poll task ended unexpectedly")
+        if self.conn:
+            self.conn.connected = False
+            self.conn.error = f"poller stopped ({self.poller.crashed})"                               if self.poller else "poller stopped"
 
     async def stop(self):
         self.running = False
+        if self.conn and hasattr(self.conn, "cancel_reads"):
+            # First, or a read in flight runs to its deadline — seconds on a
+            # slow line — and holds up the poller, a tab waiting for read_now,
+            # and with them every step below.
+            self.conn.cancel_reads()
         if self.poller:
             self.poller.stop()
         if self._ptask:
@@ -2306,9 +3363,16 @@ class PlcSession:
         if not self.conn:
             return False
         await self.conn.disconnect()
+        old = self.conn
         # Recreate the connection object — the controller family may have
         # changed (SLC <-> Logix) and handles carry their type from creation.
         self.conn = create_connection(self.cfg, self.log)
+        # The rack layout came with the tracer's last watch list, and the tab
+        # sends the next one only when its view changes — carry it over, or the
+        # I/O would be read word by word until then. Its checks start afresh.
+        slots = getattr(old, "_io_slots", None)
+        if slots and hasattr(self.conn, "set_io_slots"):
+            self.conn.set_io_slots({s: list(v) for s, v in slots.items()})
         if self.poller:
             self.poller.conn = self.conn
         return await self.conn.connect()
@@ -2316,9 +3380,16 @@ class PlcSession:
     def status(self) -> dict:
         """Everything the GUI and /sessions need, in one snapshot."""
         c, p = self.conn, self.poller
+        dev = saved_device_for(self.cfg, self.name)
         return {
             "name":       self.name,
             "slug":       self.slug,
+            # Preset this session matches in plc_bridge_devices.json ("" when
+            # it is an ad-hoc connection). `label` is what a UI prints: the
+            # saved name, or the WebSocket port when there is no saved name.
+            "device":     (dev["name"] if dev else ""),
+            "saved":      bool(dev),
+            "label":      (dev["name"] if dev else str(self.cfg.port_ws)),
             "ip":         self.cfg.ip,
             "slot":       self.cfg.slot,
             "type":       self.cfg.controller_type,
@@ -2329,18 +3400,48 @@ class PlcSession:
             "error":      (c.error if c else ""),
             "controller": (c.controller_info if c else {}),
             "watching":   (len(p.watched) if p else 0),
+            # Non-empty once the poll loop has stopped: the port is still open
+            # and clients are still attached, so "not connected" alone would
+            # read like a link that is merely coming back up.
+            "crashed":    (p.crashed if p else ""),
             "clients":    (len(p.subscribers) if p else 0),
+            "paused":     bool(p and p.paused),
             "cycle_ms":   (p.last_cycle_ms if p else 0.0),
             "avg_ms":     (p.avg_cycle_ms if p else 0.0),
+            "ms_per_req": round(getattr(c, "last_req_ms", 0.0) if c else 0.0, 1),
             "timeouts":   (p.last_timeouts if p else 0),
+            "lost":       (getattr(c, "lost_replies", 0) if c else 0),
             "interval":   self.cfg.poll_interval,
             "groups":     (c._effective_groups() if c else 0),
             "reads":      (getattr(c, "last_phys_reads", 0) if c else 0),
             "bytes":      (getattr(c, "last_phys_bytes", 0) if c else 0),
             "rslinx":     bool(self.cfg.via_rslinx),
+            "io_block":   bool(getattr(self.cfg, "io_block", False)),
             "recording":  self.recorder.active,
             "rec_file":   self.recorder.file_name,
             "started_at": self.started_at,
+        }
+
+    def stats(self) -> dict:
+        """Poll telemetry for the browser tab on this session's port: the cycle
+        part of status(), same keys, without the bulk — cheap enough to be asked
+        for every couple of seconds. Every tab asks over its own socket, so with
+        several PLCs each window gets its own controller's numbers."""
+        c, p = self.conn, self.poller
+        return {
+            "plc":       self.name,
+            "connected": bool(c and c.connected),
+            "watching":  (len(p.watched) if p else 0),
+            "paused":    bool(p and p.paused),
+            "cycle_ms":  (p.last_cycle_ms if p else 0.0),
+            "avg_ms":    (p.avg_cycle_ms if p else 0.0),
+            # average time per request in the last cycle — what the header shows
+            "ms_per_req": round(getattr(c, "last_req_ms", 0.0) if c else 0.0, 1),
+            "timeouts":  (p.last_timeouts if p else 0),
+            "lost":      (getattr(c, "lost_replies", 0) if c else 0),
+            "interval":  self.cfg.poll_interval,
+            "reads":     (getattr(c, "last_phys_reads", 0) if c else 0),
+            "bytes":     (getattr(c, "last_phys_bytes", 0) if c else 0),
         }
 
 
@@ -2376,6 +3477,36 @@ class SessionManager:
     def status_all(self) -> list:
         return [s.status() for s in self.sessions.values()]
 
+    def brief_all(self) -> list:
+        """Small per-session summary for the browser's connect dialog.
+
+        Deliberately not status(): the dialog only needs identity, address and
+        state, and this is sent on every `hello` — one dict per PLC, no poller
+        counters, no controller blob.
+        """
+        out = []
+        for s in self.sessions.values():
+            c = s.conn
+            dev = saved_device_for(s.cfg, s.name)
+            out.append({
+                "name":      s.name,
+                "device":    (dev["name"] if dev else ""),
+                "saved":     bool(dev),
+                "label":     (dev["name"] if dev else str(s.cfg.port_ws)),
+                "ip":        s.cfg.ip,
+                "slot":      s.cfg.slot,
+                "type":      s.cfg.controller_type,
+                "ws_port":   s.cfg.port_ws,
+                "ws_url":    s.ws_url,
+                "running":   s.running,
+                "connected": bool(c and c.connected),
+                "error":     (c.error if c else ""),
+                "clients":   (len(s.poller.subscribers) if s.poller else 0),
+                "watching":  (len(s.poller.watched) if s.poller else 0),
+                "recording": s.recorder.active,
+            })
+        return out
+
     # ── ports ─────────────────────────────────────────────────────────────────
     def used_ports(self) -> set:
         return {s.cfg.port_ws for s in self.sessions.values()}
@@ -2409,6 +3540,7 @@ class SessionManager:
             log.warning(f"[{name}] WS port {want} is taken — using {port}")
         cfg.port_ws = port
         sess = PlcSession(name, cfg)
+        sess.manager = self
         self.sessions[sess.name] = sess
         try:
             await sess.start()
@@ -2435,6 +3567,35 @@ class SessionManager:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+def _session_list(session: PlcSession) -> list:
+    """Sibling sessions of this one — every PLC served by this process.
+
+    Falls back to the session itself when it was created outside a manager
+    (unit tests, an embedded single session).
+    """
+    mgr = getattr(session, "manager", None)
+    if mgr is not None:
+        try:
+            return mgr.brief_all()
+        except Exception as e:
+            log.warning(f"session list failed: {e}")
+    dev = saved_device_for(session.cfg, session.name)
+    return [{
+        "name":      session.name,
+        "device":    (dev["name"] if dev else ""),
+        "saved":     bool(dev),
+        "label":     (dev["name"] if dev else str(session.cfg.port_ws)),
+        "ip":        session.cfg.ip,
+        "slot":      session.cfg.slot,
+        "type":      session.cfg.controller_type,
+        "ws_port":   session.cfg.port_ws,
+        "ws_url":    session.ws_url,
+        "running":   session.running,
+        "connected": bool(session.conn and session.conn.connected),
+        "error":     (session.conn.error if session.conn else ""),
+    }]
+
+
 async def ws_handler(websocket, session: PlcSession):
     """Serve one browser tab.
 
@@ -2456,6 +3617,9 @@ async def ws_handler(websocket, session: PlcSession):
             # actually looking at when several bridges are up.
             "plc": session.name,
             "wsPort": cfg.port_ws,
+            # Every controller this bridge process serves, so the connect
+            # dialog can list them before the user commits to a port.
+            "sessions": _session_list(session),
             "controller": session.conn.controller_info,
             "connected": session.conn.connected,
             "error": session.conn.error,
@@ -2463,6 +3627,7 @@ async def ws_handler(websocket, session: PlcSession):
             "values": poller.values,
         }))
         async for raw in websocket:
+            cmd = None
             try:
                 msg = json.loads(raw)
                 cmd = msg.get("cmd")
@@ -2482,6 +3647,14 @@ async def ws_handler(websocket, session: PlcSession):
                             session.conn.set_tag_types(type_map)
                         except Exception as e:
                             slog.warning(f"set_tag_types failed: {e}")
+                    # SLC rack layout for I/O block reads. Absent = this tab's
+                    # project has none (L5X, older tracer) — a layout left over
+                    # from another project must not stay in use.
+                    if hasattr(session.conn, "set_io_slots"):
+                        try:
+                            session.conn.set_io_slots(msg.get("ioSlots"))
+                        except Exception as e:
+                            slog.warning(f"set_io_slots failed: {e}")
                     if removed or added:
                         slog.info(f"watch_only: +{len(added)} -{len(removed)} tags, total={len(new_tags)}")
                     if DEBUG_SAVE:
@@ -2545,11 +3718,14 @@ async def ws_handler(websocket, session: PlcSession):
                     poller.values.update(vals)
                     await websocket.send(json.dumps({"type":"values","data":vals}))
                 elif cmd == "set_interval":
-                    iv = max(0.2, min(60, float(msg.get("interval", 0.2))))
+                    iv = min(60.0, poll_interval_from(msg.get("interval")))
                     cfg.poll_interval = iv
                     await session.conn.update_poll_interval(iv)
                 elif cmd == "ping":
                     await websocket.send(json.dumps({"type":"pong","ts":time.time()}))
+                elif cmd == "list_sessions":
+                    await websocket.send(json.dumps({
+                        "type": "sessions", "sessions": _session_list(session)}))
                 elif cmd == "get_status":
                     await websocket.send(json.dumps({
                         "type":"status","connected":session.conn.connected,
@@ -2557,6 +3733,9 @@ async def ws_handler(websocket, session: PlcSession):
                         "plc":session.name,
                         "watching":list(poller.watched),
                     }))
+                elif cmd == "get_stats":
+                    # The tracer's header line: tag count + read cycle of THIS session
+                    await websocket.send(json.dumps({"type": "stats", **session.stats()}))
                 elif cmd == "reconnect":
                     ok = await session.reconnect()
                     await websocket.send(json.dumps({"type":"ack","cmd":"reconnect","ok":ok}))
@@ -2578,6 +3757,17 @@ async def ws_handler(websocket, session: PlcSession):
                     await websocket.send(json.dumps({"type":"ack","cmd":"rec_stop","ok":True}))
             except json.JSONDecodeError:
                 await websocket.send(json.dumps({"type":"error","msg":"invalid JSON"}))
+            except _WS_CLOSED:
+                raise                                  # the tab is gone
+            except Exception as e:
+                # One command failing — a records folder that cannot be written,
+                # a file held open by another program, a malformed field — used
+                # to end the whole connection: the tab went OFFLINE and stayed
+                # there, since the tracer does not reconnect by itself. Report it
+                # and keep serving. A send that fails here because the client is
+                # gone raises again and ends the loop below, as it should.
+                slog.warning(f"command {cmd!r} failed: {type(e).__name__}: {e}")
+                await websocket.send(json.dumps({"type": "error", "cmd": cmd, "msg": str(e)}))
     except Exception as e:
         slog.info(f"WS disconnected: {e}")
     finally:
@@ -2624,10 +3814,11 @@ def build_http_app(manager: SessionManager, log_buf):
         return web.json_response(vals)
     async def h_watch(req):
         s = pick(req)
-        data=await req.json(); s.poller.watch(data.get("tags",[]))
+        data=await req.json(); s.poller.watch(data.get("tags",[])); s.poller.touch_http()
         return web.json_response({"watching":list(s.poller.watched)})
     async def h_values(req):
-        return web.json_response(pick(req).poller.values)
+        s = pick(req); s.poller.touch_http()      # an HTTP reader keeps polling alive
+        return web.json_response(s.poller.values)
     async def h_reconnect(req):
         s = pick(req)
         s.conn.auto_reconnect=True; ok=await s.reconnect()
@@ -2653,7 +3844,7 @@ def build_http_app(manager: SessionManager, log_buf):
             cfg.processor_type="Logix5000" if cfg.controller_type=="logix" else cfg.processor_type
             need_reconnect=True
         if "poll_interval" in data:
-            cfg.poll_interval=max(0.2,min(60.0,float(data["poll_interval"])))
+            cfg.poll_interval=min(60.0,poll_interval_from(data["poll_interval"]))
             await s.conn.update_poll_interval(cfg.poll_interval)
         if need_reconnect:
             s.conn.auto_reconnect=True; ok=await s.reconnect()
@@ -2705,7 +3896,7 @@ def interactive_setup(cfg):
         if sl: cfg.slot=int(sl)
     iv=input(f"Интервал опроса сек [{cfg.poll_interval}]: ").strip()
     if iv:
-        try: cfg.poll_interval=float(iv)
+        try: cfg.poll_interval=poll_interval_from(iv)
         except: pass
     if input("Сохранить config? [y/N]: ").strip().lower()=="y":
         cfg.save()
@@ -2750,9 +3941,18 @@ async def main(specs, port_http: int = DEFAULT_HTTP):
         app=build_http_app(mgr,log_buf)
         runner=web.AppRunner(app)
         await runner.setup()
-        await web.TCPSite(runner,"0.0.0.0",port_http).start()
-        http_runner=runner
-        log.info(f"HTTP REST  → http://localhost:{port_http}")
+        # Best effort, as in the GUI: the port is taken when another bridge
+        # (the GUI one, say) already runs. That used to end this one with a
+        # traceback right after its sessions had started — the WebSocket
+        # sessions do not need REST at all.
+        try:
+            await web.TCPSite(runner,"0.0.0.0",port_http).start()
+            http_runner=runner
+            log.info(f"HTTP REST  → http://localhost:{port_http}")
+        except OSError as e:
+            await runner.cleanup()
+            log.warning(f"HTTP REST not started on {port_http}: {e} — "
+                        f"WebSocket sessions are unaffected")
     print(f"\n{'-'*55}")
     print(f"  Bridge started — {len(mgr)} PLC session(s).")
     for s in mgr.sessions.values():
@@ -2774,7 +3974,8 @@ def parse_args():
     p.add_argument("--slot",type=int,default=0)
     p.add_argument("--rslinx",action="store_true")
     p.add_argument("--type",default=None,choices=["slc","logix"],help="Controller family: slc (default) | logix (ControlLogix/CompactLogix)")
-    p.add_argument("--interval",type=float,default=POLL_IV)
+    p.add_argument("--interval",type=float,default=POLL_IV,
+                   help=f"Pause between poll cycles, s (default {POLL_IV}, minimum {POLL_IV_MIN})")
     p.add_argument("--slc-gap-bytes",type=int,default=None,dest="slc_gap_bytes",
                    help="SLC block reads: unwanted bytes worth carrying inside a "
                         "block to save one request. Low for a serial-gateway link "
@@ -2829,7 +4030,7 @@ if __name__=="__main__":
             sys.exit(1)
         for d in wanted:
             cfg=device_to_config(d)
-            if args.interval and args.interval!=POLL_IV: cfg.poll_interval=args.interval
+            if args.interval and args.interval!=POLL_IV: cfg.poll_interval=poll_interval_from(args.interval)
             if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
             if args.slc: cfg.slc_path=args.slc
             specs.append((d["name"],cfg))
@@ -2842,7 +4043,7 @@ if __name__=="__main__":
         if args.type:
             cfg.controller_type=args.type
             cfg.processor_type="Logix5000" if args.type=="logix" else cfg.processor_type
-        if args.interval:     cfg.poll_interval=args.interval
+        if args.interval:     cfg.poll_interval=poll_interval_from(args.interval)
         if args.conn_groups is not None: cfg.conn_groups=args.conn_groups
         if args.slc_gap_bytes is not None: cfg.slc_gap_bytes=args.slc_gap_bytes
         if args.slc:          cfg.slc_path=args.slc
