@@ -1,0 +1,84 @@
+START 1747-L552B    % 1747-L552B/C 5/05 CPU - 32K Mem. OS501 Series C FRN 3-9 %
+
+% PROCESSOR RACK CONFIGURATION INFORMATION %
+RACK 1 1746-A7   % 7-Slot Rack %
+
+% SLOT CONFIGURATION INFORMATION %
+SLOT 1 1746-OW16   % 16-Output (RLY) 240 VAC %  SCAN_IN 0 SCAN_OUT 1  IOCARD -6816 25 17799 176 11528 212 20378 116 176 236 25 0
+SLOT 2 1746-IB16   % 16-Input (SINK) 24 VDC %  SCAN_IN 1 SCAN_OUT 0  IOCARD -6816 25 17799 176 11528 212 20378 116 176 236 25 0
+
+
+PROJECT "L552"
+
+LADDER 2
+% Rung: 0 %
+SOR XIC I:2.0/0 OTE O:1.0/0 EOR 
+% Rung: 1 %
+SOR XIO I:2.0/0 OTE O:1.0/1 EOR 
+% Rung: 2 %
+SOR XIC I:2.0/1 OTL O:1.0/2 EOR 
+% Rung: 3 %
+SOR XIC O:1.0/2 TON T4:0 1.0 10 0 EOR 
+% Rung: 4 %
+SOR XIC T4:0/DN OTU O:1.0/2 EOR 
+% Rung: 5 %
+SOR XIC I:2.0/2 TOF T4:1 1.0 10 10 EOR 
+% Rung: 6 %
+SOR XIC T4:1/DN OTE O:1.0/3 EOR 
+% Rung: 7 %
+SOR EQU T4:1.ACC 5 OTL O:1.0/4 EOR 
+% Rung: 8 %
+SOR GRT T4:1.ACC 8 OTU O:1.0/4 EOR 
+
+
+DATA O:1
+% O:1.0 % 0X0002 
+
+
+DATA I:2
+% I:2.0 % 0X0000 
+
+
+DATA S:0
+% S:0 %      0    134 -28654   2560   5590  16384      0      0      0      3 
+% S:10 %     33     -1     -1      0      0      0      0      2      0      0 
+% S:20 %      0      0      1      1      0      0      0     -1     -1      0 
+% S:30 %      0      0      0      8      0      1      0   1924      4     21 
+% S:40 %     22     52     50      0      0      0      0      0      0      0 
+% S:50 %      0      0      0      0      0      0      0    501      2      9 
+% S:60 %    552      2      5   2049     95     32    512      0      0      0 
+% S:70 %      0      0      0      0      0      0      0      0      0      0 
+% S:80 %      0      0      0 
+
+DATA B3:0 
+% B3:0  %      0 
+
+DATA T4:0 
+% .CTL   .PRE   .ACC    %
+0X02DD     10      0 % T4:0  %
+0X02DD     10     10 % T4:1  %
+
+DATA C5:0 
+% .CTL   .PRE   .ACC    %
+0X0000      0      0 % C5:0  %
+
+DATA R6:0 
+% .CTL   .LEN   .POS    %
+0X0000      0      0 % R6:0  %
+
+DATA N7:0 
+% N7:0  %      0 
+
+DATA F8:0 
+% F8:0  %             0 
+
+FORCE O:01
+% ON     OFF  %
+0X0000 0XFFFF % FORCE O:1.0 %
+
+
+FORCE I:02
+% ON     OFF  %
+0X0000 0XFFFF % FORCE I:2.0 %
+
+

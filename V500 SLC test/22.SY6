@@ -1,0 +1,159 @@
+ADDRESS................................ SYMFIL SYMBOL.............. DES 1............... DES 2............... DES 3............... DES 4............... DES 5............... DEV.. ABV...... BLW......
+S:0                                     0                           Arithmetic           Flags                                                                               0                        
+S:0/0                                   0                           Processor            Arithmetic           Carry                Flag                                      0                        
+S:0/1                                   0                           Processor            Arithmetic           Underflow/           Overflow             Flag                 0                        
+S:0/2                                   0                           Processor            Arithmetic           Zero                 Flag                                      0                        
+S:0/3                                   0                           Processor            Arithmetic           Sign                 Flag                                      0                        
+S:1                                     0                           Processor            Mode                 Status/              Control                                   0                        
+S:1/0                                   0                           Processor            Mode                 Bit 0                                                          0                        
+S:1/1                                   0                           Processor            Mode                 Bit 1                                                          0                        
+S:1/2                                   0                           Processor            Mode                 Bit 2                                                          0                        
+S:1/3                                   0                           Processor            Mode                 Bit 3                                                          0                        
+S:1/4                                   0                           Processor            Mode                 Bit 4                                                          0                        
+S:1/5                                   0                           Forces               Enabled                                                                             0                        
+S:1/6                                   0                           Forces               Present                                                                             0                        
+S:1/7                                   0                           Comms                Active                                                                              0                        
+S:1/8                                   0                           Fault                Override             at Powerup                                                     0                        
+S:1/9                                   0                           Startup              Protection           Fault                                                          0                        
+S:1/10                                  0                           Load                 Memory               Module on            Memory               Error                0                        
+S:1/11                                  0                           Load                 Memory               Module               Always                                    0                        
+S:1/12                                  0                           Load                 Memory               Module               and RUN                                   0                        
+S:1/13                                  0                           Major                Error                Halted                                                         0                        
+S:1/14                                  0                           Access               Denied                                                                              0                        
+S:1/15                                  0                           First Pass                                                                                               0                        
+S:2/0                                   0                           STI                  Pending                                                                             0                        
+S:2/1                                   0                           STI                  Enabled                                                                             0                        
+S:2/2                                   0                           STI                  Executing                                                                           0                        
+S:2/3                                   0                           Index                Addressing           File Range                                                     0                        
+S:2/4                                   0                           Saved with           Debug                Single               Step                                      0                        
+S:2/5                                   0                           DH-485               Incoming             Command              Pending                                   0                        
+S:2/6                                   0                           DH-485               Message              Reply                Pending                                   0                        
+S:2/7                                   0                           DH-485               Outgoing             Message              Command              Pending              0                        
+S:2/15                                  0                           Comms                Servicing            Selection                                                      0                        
+S:3                                     0                           Current              Scan Time/           Watchdog             Scan Time                                 0                        
+S:4                                     0                           Time Base                                                                                                0                        
+S:5/0                                   0                           Overflow             Trap                                                                                0                        
+S:5/2                                   0                           Control              Register             Error                                                          0                        
+S:5/3                                   0                           Major Err            Detected             Executing            UserFault            Routine              0                        
+S:5/4                                   0                           M0-M1                Referenced           on                   Disabled             Slot                 0                        
+S:5/8                                   0                           Memory               Module               Boot                                                           0                        
+S:5/9                                   0                           Memory               Module               Password             Mismatch                                  0                        
+S:5/10                                  0                           STI                  Overflow                                                                            0                        
+S:5/11                                  0                           Battery              Low                                                                                 0                        
+S:6                                     0                           Major                Error                Fault                Code                                      0                        
+S:7                                     0                           Suspend              Code                                                                                0                        
+S:8                                     0                           Suspend              File                                                                                0                        
+S:9                                     0                           Active               Nodes                                                                               0                        
+S:10                                    0                           Active               Nodes                                                                               0                        
+S:11                                    0                           I/O Slot             Enables                                                                             0                        
+S:12                                    0                           I/O Slot             Enables                                                                             0                        
+S:13                                    0                           Math                 Register                                                                            0                        
+S:14                                    0                           Math                 Register                                                                            0                        
+S:15                                    0                           Node                 Address/             Baud Rate                                                      0                        
+S:16                                    0                           Debug                Single               Step Rung                                                      0                        
+S:17                                    0                           Debug                Single               Step File                                                      0                        
+S:18                                    0                           Debug                Single               Step                 Breakpoint           Rung                 0                        
+S:19                                    0                           Debug                Single               Step                 Breakpoint           File                 0                        
+S:20                                    0                           Debug                Fault/               Powerdown            Rung                                      0                        
+S:21                                    0                           Debug                Fault/               Powerdown            File                                      0                        
+S:22                                    0                           Maximum              Observed             Scan Time                                                      0                        
+S:23                                    0                           Average              Scan Time                                                                           0                        
+S:24                                    0                           Index                Register                                                                            0                        
+S:25                                    0                           I/O                  Interrupt            Pending                                                        0                        
+S:26                                    0                           I/O                  Interrupt            Pending                                                        0                        
+S:27                                    0                           I/O                  Interrupt            Enabled                                                        0                        
+S:28                                    0                           I/O                  Interrupt            Enabled                                                        0                        
+S:29                                    0                           User Fault           Routine              File                 Number                                    0                        
+S:30                                    0                           STI                  Setpoint                                                                            0                        
+S:31                                    0                           STI File             Number                                                                              0                        
+S:32                                    0                           I/O                  Interrupt            Executing                                                      0                        
+S:33                                    0                           Extended             Proc                 Status               Control              Word                 0                        
+S:33/0                                  0                           Incoming             Command              Pending                                                        0                        
+S:33/1                                  0                           Message              Reply                Pending                                                        0                        
+S:33/2                                  0                           Outgoing             Message              Command              Pending                                   0                        
+S:33/3                                  0                           Selection            Status               User/DF1                                                       0                        
+S:33/4                                  0                           Communicat           Active                                                                              0                        
+S:33/5                                  0                           Communicat           Servicing            Selection                                                      0                        
+S:33/6                                  0                           Message              Servicing            Selection            Channel 0                                 0                        
+S:33/7                                  0                           Message              Servicing            Selection            Channel 1                                 0                        
+S:33/8                                  0                           Interrupt            Latency              Control              Flag                                      0                        
+S:33/9                                  0                           Scan                 Toggle               Flag                                                           0                        
+S:33/10                                 0                           Discrete             Input                Interrupt            Reconfigur           Flag                 0                        
+S:33/11                                 0                           Online               Edit                 Status                                                         0                        
+S:33/12                                 0                           Online               Edit                 Status                                                         0                        
+S:33/13                                 0                           Scan Time            Timebase             Selection                                                      0                        
+S:33/14                                 0                           DTR                  Control              Bit                                                            0                        
+S:33/15                                 0                           DTR Force            Bit                                                                                 0                        
+S:34                                    0                           Pass-thru            Disabled                                                                            0                        
+S:34/0                                  0                           Pass-Thru            Disabled             Flag                                                           0                        
+S:34/1                                  0                           DH+ Active           Node Table           Enable               Flag                                      0                        
+S:34/2                                  0                           Floating             Point                Math Flag Disable,Fl                                           0                        
+S:35                                    0                           Last 1 ms            Scan Time                                                                           0                        
+S:36                                    0                           Extended             Minor                Error Bits                                                     0                        
+S:36/8                                  0                           DII Lost                                                                                                 0                        
+S:36/9                                  0                           STI Lost                                                                                                 0                        
+S:36/10                                 0                           Memory               Module               Data File            Overwrite            Protection           0                        
+S:37                                    0                           Clock                Calendar             Year                                                           0                        
+S:38                                    0                           Clock                Calendar             Month                                                          0                        
+S:39                                    0                           Clock                Calendar             Day                                                            0                        
+S:40                                    0                           Clock                Calendar             Hours                                                          0                        
+S:41                                    0                           Clock                Calendar             Minutes                                                        0                        
+S:42                                    0                           Clock                Calendar             Seconds                                                        0                        
+S:43                                    0                           STI                  Interrupt            Time                                                           0                        
+S:44                                    0                           I/O Event            Interrupt            Time                                                           0                        
+S:45                                    0                           DII                  Interrupt            Time                                                           0                        
+S:46                                    0                           Discrete             Input                Interrupt-           File                 Number               0                        
+S:47                                    0                           Discrete             Input                Interrupt-           Slot                 Number               0                        
+S:48                                    0                           Discrete             Input                Interrupt-           Bit Mask                                  0                        
+S:49                                    0                           Discrete             Input                Interrupt-           Compare              Value                0                        
+S:50                                    0                           Processor            Catalog              Number                                                         0                        
+S:51                                    0                           Discrete             Input                Interrupt-           Return               Number               0                        
+S:52                                    0                           Discrete             Input                Interrupt-           Accumulat                                 0                        
+S:53                                    0                           Reserved/            Clock                Calendar             Day of               the Week             0                        
+S:55                                    0                           Last DII             Scan                 Time                                                           0                        
+S:56                                    0                           Maximum              Observed             DII                  Scan Time                                 0                        
+S:57                                    0                           Operating            System               Catalog              Number                                    0                        
+S:58                                    0                           Operating            System               Series                                                         0                        
+S:59                                    0                           Operating            System FRN                                                                          0                        
+S:61                                    0                           Processor            Series                                                                              0                        
+S:62                                    0                           Processor            Revision                                                                            0                        
+S:63                                    0                           User                 Program              Type                                                           0                        
+S:64                                    0                           User                 Program              Functional           Index                                     0                        
+S:65                                    0                           User RAM             Size                                                                                0                        
+S:66                                    0                           Flash                EEPROM               Size                                                           0                        
+S:67                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:68                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:69                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:70                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:71                                    0                           Channel 0            Active               Nodes                                                          0                        
+I:2.0/0                                 0                           in2-0                                                                                                    0                        
+S:72                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:73                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:74                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:75                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:76                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:77                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:78                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:79                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:80                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:81                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:82                                    0                           Channel 0            Active               Nodes                                                          0                        
+S:83                                    0                           DH+ Active           Nodes                                                                               0                        
+S:84                                    0                           DH+ Active           Nodes                                                                               0                        
+S:85                                    0                           DH+ Active           Nodes                                                                               0                        
+S:86                                    0                           DH+ Active           Nodes                                                                               0                        
+O:1.0/2                                 0                           O1-2                                                                                                     0                        
+I:2.0/1                                 0                           i2-1                                                                                                     0                        
+O:1.0/1                                 0                           O1-1                                                                                                     0                        
+O:1.0/0                                 0                           O1-0                                                                                                     0                        
+T4:0                                    0                                                                                                                                    0                        
+O:1.0/4                                 0                                                                                                                                    0                        
+DFILE:00000                             0                           OUTPUT                                                                                                   0                        
+DFILE:00001                             0                           INPUT                                                                                                    0                        
+DFILE:00002                             0                           STATUS                                                                                                   0                        
+DFILE:00003                             0                           BINARY                                                                                                   0                        
+DFILE:00004                             0                           TIMER                                                                                                    0                        
+DFILE:00005                             0                           COUNTER                                                                                                  0                        
+DFILE:00006                             0                           CONTROL                                                                                                  0                        
+DFILE:00007                             0                           INTEGER                                                                                                  0                        
+DFILE:00008                             0                           FLOAT                                                                                                    0                        

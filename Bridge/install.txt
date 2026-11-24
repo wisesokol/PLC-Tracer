@@ -1,0 +1,65 @@
+PLC Bridge — Setup on a clean Windows x64
+==========================================
+
+1. PYTHON
+   Install Python 3.10+ (https://python.org)
+   Tick "Add Python to PATH" during setup.
+
+2. DEPENDENCIES
+   Open cmd / PowerShell and run:
+
+   pip install websockets aiohttp aiohttp-cors
+
+   websockets is required: without it a session still starts, but it serves no
+   port and the tracer cannot connect (the GUI warns about this at startup).
+   aiohttp / aiohttp-cors are only for the HTTP REST API — the bridge works
+   without them.
+
+3. FILES
+   Copy the Bridge\ folder to the target machine.
+   Layout:
+     Bridge\
+       plc_bridge_500.py      — the bridge (headless, run from a terminal)
+       plc_bridge_ui.py       — the bridge with a GUI (tkinter, recommended)
+       libplctag_2.6.16_windows_x64\
+         plctag.dll            — native driver for SLC 5/05
+       RECORDS\               — folder for recordings (created automatically)
+
+   plctag.dll ships with the bridge, nothing else to install.
+
+4. RUNNING
+   GUI mode (recommended):
+     python plc_bridge_ui.py
+
+   Terminal mode:
+     python plc_bridge_500.py --ip 192.168.1.10 --type slc
+     python plc_bridge_500.py --ip 192.168.1.10 --type logix
+
+   With no arguments — interactive setup:
+     python plc_bridge_500.py
+
+5. SEVERAL PLCs AT ONCE
+   One process serves any number of controllers: each one is a separate session
+   on its OWN WebSocket port, and a browser tab connects to the port of the PLC
+   it wants to watch.
+
+   GUI:  fill in the fields and press "Start" — the session is added next to the
+         ones already running. The port is assigned automatically (or set in the
+         "WS port" field). Running sessions are listed in the sessions table;
+         double-click a row to copy its ws:// address to the clipboard.
+
+   Terminal (by the names of the devices saved in the GUI):
+     python plc_bridge_500.py --plc Line1 --plc Line2
+     python plc_bridge_500.py --all-plc
+
+   In the tracer: LIVE panel -> WEBSOCKET URL field -> enter the port of your PLC.
+
+6. PORTS
+   WebSocket:  8765, 8767, 8768 …  — one per session (8766 is skipped)
+   HTTP REST:  8766               — one per process, session picked by ?plc=<name>
+
+   Behind a firewall — allow inbound TCP 8765-8770 and 8766.
+
+7. CONTROLLERS
+   SLC 5/05, MicroLogix       -> --type slc    (libplctag, PCCC)
+   ControlLogix, CompactLogix -> --type logix  (libplctag, CIP)
